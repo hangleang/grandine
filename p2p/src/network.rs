@@ -1611,6 +1611,7 @@ impl<P: Preset> Network<P> {
             PubsubMessage::LightClientOptimisticUpdate(_) => {
                 debug!("received light client optimistic update as gossip");
             }
+            PubsubMessage::DataColumnSidecar(_) => todo!(),
         }
     }
 

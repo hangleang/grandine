@@ -1,3 +1,4 @@
+use crate::misc::DataColumnSidecarAction;
 use core::ops::{AddAssign as _, Bound, SubAssign as _};
 use std::{
     backtrace::Backtrace,
@@ -8,6 +9,9 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Result};
 use arithmetic::NonZeroExt as _;
 use clock::Tick;
+use eip_7594::{
+    compute_subnet_for_data_column_sidecar, ColumnIndex, DataColumnSidecar, NUMBER_OF_COLUMNS,
+};
 use execution_engine::ExecutionEngine;
 use features::Feature;
 use hash_hasher::HashedMap;
@@ -202,6 +206,7 @@ pub struct Store<P: Preset> {
     aggregate_and_proof_supersets: Arc<AggregateAndProofSupersets<P>>,
     accepted_blob_sidecars:
         HashMap<(Slot, ValidatorIndex, BlobIndex), HashMap<H256, KzgCommitment>>,
+    accepted_data_sidecars: HashSet<(Slot, ValidatorIndex, ColumnIndex)>,
     blob_cache: BlobCache<P>,
     state_cache: Arc<StateCacheProcessor<P>>,
     rejected_block_roots: HashSet<H256>,
@@ -272,6 +277,7 @@ impl<P: Preset> Store<P> {
             execution_payload_locations: hashmap! {},
             aggregate_and_proof_supersets: Arc::new(AggregateAndProofSupersets::new()),
             accepted_blob_sidecars: HashMap::default(),
+            accepted_data_sidecars: HashSet::default(),
             blob_cache: BlobCache::default(),
             state_cache: Arc::new(StateCacheProcessor::new(
                 store_config.state_cache_lock_timeout,
@@ -1849,6 +1855,171 @@ impl<P: Preset> Store<P> {
         Ok(BlobSidecarAction::Accept(blob_sidecar))
     }
 
+    pub fn validate_data_column_sidecar(
+        &self,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        subnet_id: u64,
+        current_slot: Slot,
+        mut verifier: impl Verifier + Send,
+    ) -> Result<DataColumnSidecarAction<P>> {
+        let block_header = data_column_sidecar.signed_block_header.message;
+        let mut state = self
+            .state_cache
+            .before_or_at_slot(self, block_header.parent_root, block_header.slot)
+            .unwrap_or_else(|| {
+                self.chain_link(block_header.parent_root)
+                    .or_else(|| self.chain_link_before_or_at(block_header.slot))
+                    .map(|chain_link| chain_link.state(self))
+                    .unwrap_or_else(|| self.head().state(self))
+            });
+        // [REJECT] The sidecar's index is consistent with NUMBER_OF_COLUMNS -- i.e. sidecar.index < NUMBER_OF_COLUMNS.
+        ensure!(
+            data_column_sidecar.index < NUMBER_OF_COLUMNS,
+            Error::DataColumnSidecarInvalidIndex {
+                data_column_sidecar
+            },
+        );
+
+        // [REJECT] The sidecar is for the correct subnet -- i.e. compute_subnet_for_data_column_sidecar(sidecar.index) == subnet_id.
+        // galimai sitas neveikia su gossipu
+        let expected = compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
+        ensure!(
+            (subnet_id as usize) == expected,
+            Error::DataColumnSidecarOnIncorrectSubnet {
+                data_column_sidecar,
+                expected: expected.try_into().unwrap(),
+                actual: subnet_id,
+            },
+        );
+
+        // [IGNORE] The sidecar is not from a future slot (with a MAXIMUM_GOSSIP_CLOCK_DISPARITY allowance) -- i.e. validate that block_header.slot <= current_slot (a client MAY queue future sidecars for processing at the appropriate slot).
+        if data_column_sidecar.signed_block_header.message.slot > current_slot {
+            return Ok(DataColumnSidecarAction::Ignore);
+        }
+        // [IGNORE] The sidecar is from a slot greater than the latest finalized slot -- i.e. validate that block_header.slot > compute_start_slot_at_epoch(state.finalized_checkpoint.epoch)
+        if data_column_sidecar.signed_block_header.message.slot
+            <= misc::compute_start_slot_at_epoch::<P>(state.finalized_checkpoint().epoch)
+        {
+            return Ok(DataColumnSidecarAction::Ignore);
+        }
+
+        // [REJECT] The proposer signature of sidecar.signed_block_header, is valid with respect to the block_header.proposer_index pubkey.
+        verifier.verify_singular(
+            data_column_sidecar
+                .signed_block_header
+                .message
+                .signing_root(&self.chain_config, &state),
+            data_column_sidecar.signed_block_header.signature,
+            accessors::public_key(&state, block_header.proposer_index)?,
+            SignatureKind::BlockInBlobSidecar,
+        )?;
+
+        // [REJECT] The sidecar's kzg_commitments field inclusion proof is valid as verified by verify_data_column_sidecar_inclusion_proof(sidecar).
+        ensure!(
+            data_column_sidecar.verify_sidecar_inclusion_proof(),
+            Error::DataColumnSidecarInvalidInclusionProof {
+                data_column_sidecar
+            }
+        );
+
+        // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
+        ensure!(
+            data_column_sidecar.verify_kzg_proofs().unwrap_or(false),
+            Error::DataColumnSidecarInvalid {
+                data_column_sidecar
+            }
+        );
+
+        // [REJECT] The sidecar's block's parent (defined by block_header.parent_root) passes validation.
+        // Part 1/2:
+        // Since our fork choice store's implementation doesn't preserve invalid blocks,
+        // it needs to check this before sidecar's block's parent's presence check
+        ensure!(
+            !self
+                .rejected_block_roots
+                .contains(&block_header.parent_root),
+            Error::DataColumnSidecarInvalidParentOfBlock {
+                data_column_sidecar
+            },
+        );
+
+        // [IGNORE] The sidecar's block's parent (defined by block_header.parent_root) has been seen (via both gossip and non-gossip sources) (a client MAY queue sidecars for processing once the parent block is retrieved).
+        let Some(parent) = self.chain_link(block_header.parent_root) else {
+            return Ok(DataColumnSidecarAction::Ignore);
+        };
+
+        // [REJECT] The sidecar's block's parent (defined by block_header.parent_root) passes validation.
+        // Part 2/2:
+        ensure!(
+            !parent.is_invalid(),
+            Error::DataColumnSidecarInvalidParentOfBlock {
+                data_column_sidecar
+            }
+        );
+
+        // [REJECT] The sidecar is from a higher slot than the sidecar's block's parent (defined by block_header.parent_root).
+        let parent_slot = parent.slot();
+
+        ensure!(
+            block_header.slot > parent_slot,
+            Error::DataColumnSidecarNotNewerThanBlockParent {
+                data_column_sidecar,
+                parent_slot,
+            }
+        );
+
+        // [REJECT] The current finalized_checkpoint is an ancestor of the sidecar's block -- i.e. get_checkpoint_block(store, block_header.parent_root, store.finalized_checkpoint.epoch) == store.finalized_checkpoint.root.
+        let ancestor_at_finalized_slot = self
+            .ancestor(block_header.parent_root, self.finalized_slot())
+            .expect("every block in the store should have an ancestor at the last finalized slot");
+
+        ensure!(
+            ancestor_at_finalized_slot == self.finalized_checkpoint.root,
+            Error::DataColumnSidecarBlockNotADescendantOfFinalized {
+                data_column_sidecar
+            },
+        );
+
+        // [IGNORE] The sidecar is the first sidecar for the tuple (block_header.slot, block_header.proposer_index, sidecar.index) with valid header signature, sidecar inclusion proof, and kzg proof.
+        if self.accepted_data_sidecars.contains(&(
+            block_header.slot,
+            block_header.proposer_index,
+            data_column_sidecar.index,
+        )) {
+            return Ok(DataColumnSidecarAction::Ignore);
+        }
+
+        // [REJECT] The sidecar is proposed by the expected proposer_index for the block's slot in the context of the current shuffling (defined by block_header.parent_root/block_header.slot). If the proposer_index cannot immediately be verified against the expected shuffling, the sidecar MAY be queued for later processing while proposers for the block's branch are calculated -- in such a case do not REJECT, instead IGNORE this message.
+        if state.slot() < block_header.slot {
+            if Feature::WarnOnStateCacheSlotProcessing.is_enabled() && self.is_forward_synced() {
+                // `Backtrace::force_capture` can be costly and a warning may be excessive,
+                // but this is controlled by a `Feature` that should be disabled by default.
+                warn!(
+                    "processing slots for beacon state not found in state cache before state transition \
+                    (block root: {:?}, from slot {} to {})\n{}",
+                    block_header.parent_root,
+                    state.slot(),
+                    block_header.slot,
+                    Backtrace::force_capture(),
+                );
+            }
+
+            combined::process_slots(&self.chain_config, state.make_mut(), block_header.slot)?;
+        }
+
+        let computed = accessors::get_beacon_proposer_index(&state)?;
+
+        ensure!(
+            block_header.proposer_index == computed,
+            Error::DataColumnSidecarProposerIndexMismatch {
+                data_column_sidecar,
+                computed,
+            }
+        );
+
+        Ok(DataColumnSidecarAction::Accept(data_column_sidecar))
+    }
+
     /// [`on_tick`](https://github.com/ethereum/consensus-specs/blob/v1.3.0/specs/phase0/fork-choice.md#on_tick)
     pub fn apply_tick(&mut self, new_tick: Tick) -> Result<Option<ApplyTickChanges<P>>> {
         let old_tick = self.tick;
@@ -2159,6 +2330,17 @@ impl<P: Preset> Store<P> {
         commitments.insert(block_root, blob_sidecar.kzg_commitment);
 
         self.blob_cache.insert(blob_sidecar);
+    }
+
+    pub fn apply_data_sidecar(&mut self, data_sidecar: Arc<DataColumnSidecar<P>>) {
+        let block_header = data_sidecar.signed_block_header.message;
+        let block_root = block_header.hash_tree_root();
+
+        let commitments = self.accepted_data_sidecars.insert((
+            block_header.slot,
+            block_header.proposer_index,
+            data_sidecar.index,
+        ));
     }
 
     fn insert_block(&mut self, chain_link: ChainLink<P>) -> Result<()> {
