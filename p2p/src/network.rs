@@ -37,6 +37,7 @@ use prometheus_client::registry::Registry;
 use prometheus_metrics::Metrics;
 use slog::{o, Drain as _, Logger};
 use slog_stdlog::StdLog;
+use ssz::SszHash as _;
 use ssz::{BitList, BitVector};
 use std_ext::ArcExt as _;
 use thiserror::Error;
@@ -946,6 +947,8 @@ impl<P: Preset> Network<P> {
                 debug!("received MetaData request (peer_id: {peer_id}, request: {request:?})");
                 Ok(())
             }
+            Request::DataColumnsByRoot(_) => todo!(),
+            Request::DataColumnsByRange(_) => todo!(),
         }
     }
 
@@ -1372,6 +1375,17 @@ impl<P: Preset> Network<P> {
                 // TODO(Altair Light Client Sync Protocol)
                 debug!("received LightClientUpdatesByRange response (peer_id: {peer_id})");
             }
+            // TODO(feature/eip7594)
+            Response::DataColumnsByRange(Some(data_column_sidecar)) => todo!(),
+            Response::DataColumnsByRange(None) => {
+                self.log_with_feature(format_args!(
+                    "peer {peer_id} terminated DataColumnsByRange response stream for request_id: {request_id}",
+                ));
+
+                P2pToSync::DataColumnsByRangeRequestFinished(request_id)
+                    .send(&self.channels.p2p_to_sync_tx);
+            }
+            Response::DataColumnsByRoot(_) => todo!(),
         }
     }
 
@@ -1442,7 +1456,41 @@ impl<P: Preset> Network<P> {
                     block_seen,
                 );
             }
-            PubsubMessage::DataColumnSidecar(_) => {}
+            PubsubMessage::DataColumnSidecar(data) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_gossip_object(&["data_column_sidecar"]);
+                }
+
+                let (subnet_id, data_column_sidecar) = *data;
+
+                self.log_with_feature(format_args!(
+                    "received data column sidecar as gossip in subnet {subnet_id}: {data_column_sidecar:?} from {source}",
+                ));
+
+                let chain_config = self.controller.chain_config().as_ref();
+                let epoch = misc::compute_epoch_at_slot::<P>(data_column_sidecar.slot());
+
+                if chain_config.is_eip7594_fork(epoch) {
+                    let block_seen = self.received_block_roots.contains_key(
+                        &data_column_sidecar
+                            .signed_block_header
+                            .message
+                            .hash_tree_root(),
+                    );
+
+                    self.controller.on_gossip_data_column_sidecar(
+                        data_column_sidecar,
+                        subnet_id,
+                        GossipId { source, message_id },
+                        block_seen,
+                    );
+                } else {
+                    self.log_with_feature(format_args!(
+                        "ignoring pre-eip7594 data column sidecar in slot {} / {epoch}",
+                        data_column_sidecar.slot(),
+                    ));
+                }
+            }
             PubsubMessage::AggregateAndProofAttestation(aggregate_and_proof) => {
                 if let Some(metrics) = self.metrics.as_ref() {
                     metrics.register_gossip_object(&["aggregate_and_proof_attestation"]);
@@ -1611,7 +1659,6 @@ impl<P: Preset> Network<P> {
             PubsubMessage::LightClientOptimisticUpdate(_) => {
                 debug!("received light client optimistic update as gossip");
             }
-            PubsubMessage::DataColumnSidecar(_) => todo!(),
         }
     }
 
@@ -2010,7 +2057,7 @@ fn run_network_service<P: Preset>(
                             service.goodbye_peer(&peer_id, goodbye_reason, report_source);
                         }
                         ServiceInboundMessage::Publish(message) => {
-                            service.publish(message);
+                            service.publish(vec![message]);
                         }
                         ServiceInboundMessage::ReportPeer(peer_id, action, source, msg) => {
                             service.report_peer(&peer_id, action, source, msg);
