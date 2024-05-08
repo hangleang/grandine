@@ -24,7 +24,7 @@ use ssz::SszHash as _;
 use types::{
     combined::{AttesterSlashing, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::DataColumnIdentifier,
+    eip7594::{DataColumnIdentifier, DataColumnSidecar},
     nonstandard::{RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
@@ -38,7 +38,6 @@ use crate::{
     block_processor::BlockProcessor, messages::MutatorMessage, misc::VerifyAggregateAndProofResult,
     storage::Storage,
 };
-use eip_7594::DataColumnSidecar;
 
 pub trait Run {
     fn run(self);
