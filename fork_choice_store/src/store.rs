@@ -69,8 +69,8 @@ use crate::{
         BlobSidecarAction, BlobSidecarOrigin, BlockAction, BranchPoint, ChainLink,
         DataAvailabilityPolicy, DataColumnSidecarAction, DataColumnSidecarOrigin, Difference,
         DifferenceAtLocation, DissolvedDifference, LatestMessage, Location,
-        PartialAttestationAction, PartialBlockAction, PayloadAction, Score, SegmentId,
-        Storage, UnfinalizedBlock, ValidAttestation,
+        PartialAttestationAction, PartialBlockAction, PayloadAction, Score, SegmentId, Storage,
+        UnfinalizedBlock, ValidAttestation,
     },
     segment::{Position, Segment},
     state_cache_processor::StateCacheProcessor,
@@ -358,6 +358,16 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         blob_id: BlobIdentifier,
     ) -> Option<Arc<BlobSidecar<P>>> {
         self.blob_cache.get(blob_id)
+    }
+
+    #[must_use]
+    pub fn cached_data_column_sidecar_by_id(
+        &self,
+        data_column_id: DataColumnIdentifier,
+    ) -> Option<Arc<DataColumnSidecar<P>>> {
+        self.data_column_cache
+            .get(&data_column_id)
+            .map(|(sidecar, _)| (*sidecar).clone_arc())
     }
 
     #[must_use]
