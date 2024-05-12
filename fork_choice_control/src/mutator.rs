@@ -585,7 +585,7 @@ where
 
                         let peer_id = pending_block.origin.peer_id();
 
-                        // P2pMessage::DataColumnsNeeded(column_ids, slot, peer_id).send(&self.p2p_tx);
+                        P2pMessage::DataColumnsNeeded(column_ids, slot, peer_id).send(&self.p2p_tx);
 
                         self.delay_block_until_blobs(block_root, pending_block);
                     }
@@ -1876,7 +1876,6 @@ where
 
         self.update_store_snapshot();
 
-        todo!();
         // TODO(feature/eip-7594):
 
         // if let Some(pending_block) = self.delayed_until_blobs.get(&block_root) {
