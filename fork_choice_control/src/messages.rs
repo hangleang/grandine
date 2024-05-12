@@ -15,13 +15,14 @@ use execution_engine::PayloadStatusV1;
 use fork_choice_store::{
     AggregateAndProofOrigin, AttestationAction, AttestationItem, AttestationValidationError,
     AttesterSlashingOrigin, BlobSidecarAction, BlobSidecarOrigin, BlockAction, BlockOrigin,
-    ChainLink, DataColumnSidecarOrigin, Store,
+    ChainLink, DataColumnSidecarAction, DataColumnSidecarOrigin,
 };
 use log::debug;
 use serde::Serialize;
 use types::{
     combined::{Attestation, BeaconState, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
+    eip7594::DataColumnIdentifier,
     phase0::{
         containers::Checkpoint,
         primitives::{DepositIndex, ExecutionBlockHash, Slot, ValidatorIndex, H256},
@@ -33,7 +34,6 @@ use crate::{
     misc::{MutatorRejectionReason, VerifyAggregateAndProofResult, VerifyAttestationResult},
     unbounded_sink::UnboundedSink,
 };
-use fork_choice_store::DataColumnSidecarAction;
 
 #[cfg(test)]
 use core::fmt::Debug;
@@ -177,6 +177,7 @@ pub enum P2pMessage<P: Preset> {
     Reject(GossipId, MutatorRejectionReason),
     BlockNeeded(H256, Option<PeerId>),
     BlobsNeeded(Vec<BlobIdentifier>, Slot, Option<PeerId>),
+    DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot, Option<PeerId>),
     FinalizedCheckpoint(Checkpoint),
     HeadState(#[cfg_attr(test, derivative(Debug = "ignore"))] Arc<BeaconState<P>>),
 }
