@@ -126,6 +126,7 @@ pub enum SyncToP2p {
     RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnIdentifier>),
     RequestPeerStatus(RequestId, PeerId),
     SubscribeToCoreTopics,
+    SubscribeToDataColumnTopics,
 }
 
 impl SyncToP2p {
@@ -156,6 +157,7 @@ pub enum ValidatorToP2p<P: Preset> {
     Reject(GossipId, PoolRejectionReason),
     PublishBeaconBlock(Arc<SignedBeaconBlock<P>>),
     PublishBlobSidecar(Arc<BlobSidecar<P>>),
+    PublishDataColumnSidecar(Arc<DataColumnSidecar<P>>),
     PublishSingularAttestation(Arc<Attestation<P>>, SubnetId),
     PublishAggregateAndProof(Arc<SignedAggregateAndProof<P>>),
     PublishSyncCommitteeMessage(Box<(SubnetId, SyncCommitteeMessage)>),
