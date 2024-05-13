@@ -62,7 +62,6 @@ use types::{
 };
 
 use crate::{
-    back_sync::Data,
     messages::{
         ApiToP2p, P2pToSlasher, P2pToSync, P2pToValidator, ServiceInboundMessage,
         ServiceOutboundMessage, SubnetServiceToP2p, SyncToP2p, ValidatorToP2p,
@@ -347,15 +346,9 @@ impl<P: Preset> Network<P> {
                         }
                         P2pMessage::DataColumnsNeeded(identifiers, slot, peer_id) => {
                             if let Some(peer_id) = peer_id {
-                                self.log(
-                                    Level::Debug,
-                                    format_args!("data columns needed: {identifiers:?} from {peer_id}"),
-                                );
+                                debug!("data columns needed: {identifiers:?} from {peer_id}");
                             } else {
-                                self.log(
-                                    Level::Debug,
-                                    format_args!("data columns needed: {identifiers:?}"),
-                                );
+                                debug!("data columns needed: {identifiers:?}");
                             }
 
                             let peer_id = self.ensure_peer_connected(peer_id);
@@ -379,8 +372,6 @@ impl<P: Preset> Network<P> {
                             self.prune_received_blob_sidecars(finalized_checkpoint.epoch);
                             self.prune_received_block_roots(finalized_checkpoint.epoch);
                             self.prune_received_data_column_sidecars(finalized_checkpoint.epoch);
-
-                            P2pToSync::FinalizedEpoch(self.controller.finalized_epoch()).send(&self.channels.p2p_to_sync_tx);
                         }
                         P2pMessage::HeadState(_state) => {
                             // This message is only used in tests
@@ -467,9 +458,6 @@ impl<P: Preset> Network<P> {
                         }
                         SyncToP2p::SubscribeToDataColumnTopics => {
                             self.subscribe_to_data_column_topics();
-                        }
-                        SyncToP2p::PruneReceivedBlocks => {
-                            self.received_block_roots = HashMap::new();
                         }
                     }
                 },
@@ -614,11 +602,8 @@ impl<P: Preset> Network<P> {
         let subnet_id = misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
         let data_column_identifier: DataColumnIdentifier = data_column_sidecar.as_ref().into();
 
-        self.log(
-            Level::Debug,
-            format_args!(
-                "publishing data column sidecar: {data_column_identifier:?}, subnet_id: {subnet_id}"
-            ),
+        debug!(
+            "publishing data column sidecar: {data_column_identifier:?}, subnet_id: {subnet_id}"
         );
 
         self.publish(PubsubMessage::DataColumnSidecar(Box::new((
@@ -955,14 +940,21 @@ impl<P: Preset> Network<P> {
                 self.handle_blocks_by_root_request(peer_id, peer_request_id, request_id, request);
                 Ok(())
             }
-            RequestType::DataColumnsByRange(_) => {
-                debug!("received DataColumnsByRange request (peer_id: {peer_id})");
+            RequestType::DataColumnsByRoot(request) => {
+                self.handle_data_columns_by_root_request(
+                    peer_id,
+                    peer_request_id,
+                    request_id,
+                    request,
+                );
                 Ok(())
             }
-            RequestType::DataColumnsByRoot(_) => {
-                debug!("received DataColumnsByRoot request (peer_id: {peer_id})");
-                Ok(())
-            }
+            RequestType::DataColumnsByRange(request) => self.handle_data_columns_by_range_request(
+                peer_id,
+                peer_request_id,
+                request_id,
+                request,
+            ),
             RequestType::LightClientBootstrap(_) => {
                 // TODO(Altair Light Client Sync Protocol)
                 debug!("received LightClientBootstrap request (peer_id: {peer_id})");
@@ -1001,13 +993,6 @@ impl<P: Preset> Network<P> {
             RequestType::MetaData(request) => {
                 debug!("received MetaData request (peer_id: {peer_id}, request: {request:?})");
                 Ok(())
-            }
-            Request::DataColumnsByRoot(request) => {
-                self.handle_data_columns_by_root_request(peer_id, peer_request_id, request);
-                Ok(())
-            }
-            Request::DataColumnsByRange(request) => {
-                self.handle_data_columns_by_range_request(peer_id, peer_request_id, request)
             }
         }
     }
@@ -1172,14 +1157,10 @@ impl<P: Preset> Network<P> {
         &self,
         peer_id: PeerId,
         peer_request_id: PeerRequestId,
+        request_id: IncomingRequestId,
         request: DataColumnsByRootRequest,
     ) {
-        self.log(
-            Level::Debug,
-            format_args!(
-                "received DataColumnsByRoot request (peer_id: {peer_id}, request: {request:?})"
-            ),
-        );
+        debug!("received DataColumnsByRoot request (peer_id: {peer_id}, request: {request:?})");
 
         let DataColumnsByRootRequest { data_column_ids } = request;
 
@@ -1187,8 +1168,6 @@ impl<P: Preset> Network<P> {
         let network_to_service_tx = self.network_to_service_tx.clone();
 
         // TODO(feature/eip7549): MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
-        let connected_peers = self.network_globals.connected_peers();
-        let target_peers = self.target_peers;
         let max_request_data_column_sidecars =
             self.controller
                 .chain_config()
@@ -1204,34 +1183,26 @@ impl<P: Preset> Network<P> {
                 let data_column_sidecars = controller.data_column_sidecars_by_ids(data_column_ids)?;
 
                 for data_column_sidecar in data_column_sidecars {
-                    log(
-                        Level::Debug,
-                        connected_peers,
-                        target_peers,
-                        format_args!(
-                            "sending DataColumnsSidecarsByRoot response chunk \
-                         (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, data_column_sidecar: {data_column_sidecar:?})",
-                        ),
+                    debug!(
+                        "sending DataColumnsSidecarsByRoot response chunk \
+                        (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, data_column_sidecar: {data_column_sidecar:?})",
                     );
 
                     ServiceInboundMessage::SendResponse(
                         peer_id,
                         peer_request_id,
+                        request_id,
                         Box::new(Response::DataColumnsByRoot(Some(data_column_sidecar))),
                     )
                     .send(&network_to_service_tx);
                 }
 
-                log(
-                    Level::Debug,
-                    connected_peers,
-                    target_peers,
-                    "terminating DataColumnsByRoot response stream",
-                );
+                debug!("terminating DataColumnsByRoot response stream");
 
                 ServiceInboundMessage::SendResponse(
                     peer_id,
                     peer_request_id,
+                    request_id,
                     Box::new(Response::DataColumnsByRoot(None)),
                 )
                 .send(&network_to_service_tx);
@@ -1245,15 +1216,11 @@ impl<P: Preset> Network<P> {
         &self,
         peer_id: PeerId,
         peer_request_id: PeerRequestId,
+        request_id: IncomingRequestId,
         request: DataColumnsByRangeRequest,
     ) -> Result<()> {
         // TODO(feature/eip7549): implement this
-        self.log(
-            Level::Debug,
-            format_args!(
-                "received DataColumnsByRange request (peer_id: {peer_id}, request: {request:?})"
-            ),
-        );
+        debug!("received DataColumnsByRange request (peer_id: {peer_id}, request: {request:?})");
 
         Ok(())
     }
@@ -1508,50 +1475,29 @@ impl<P: Preset> Network<P> {
                     request_id: {request_id}",
                 );
             }
-            Response::DataColumnsByRange(_) | Response::DataColumnsByRoot(_) => {}
-            Response::LightClientBootstrap(_) => {
-                // TODO(Altair Light Client Sync Protocol)
-                debug!("received LightClientBootstrap response chunk (peer_id: {peer_id})");
-            }
-            Response::LightClientFinalityUpdate(_) => {
-                // TODO(Altair Light Client Sync Protocol)
-                debug!("received LightClientFinalityUpdate response (peer_id: {peer_id})");
-            }
-            Response::LightClientOptimisticUpdate(_) => {
-                // TODO(Altair Light Client Sync Protocol)
-                debug!("received LightClientOptimisticUpdate response (peer_id: {peer_id})");
-            }
-            Response::LightClientUpdatesByRange(_) => {
-                // TODO(Altair Light Client Sync Protocol)
-                debug!("received LightClientUpdatesByRange response (peer_id: {peer_id})");
-            }
-            // TODO(feature/eip7594)
             Response::DataColumnsByRange(Some(data_column_sidecar)) => {}
             Response::DataColumnsByRange(None) => {
-                self.log_with_feature(format_args!(
+                debug!(
                     "peer {peer_id} terminated DataColumnsByRange response stream for request_id: {request_id}",
-                ));
+                );
 
                 P2pToSync::DataColumnsByRangeRequestFinished(request_id)
                     .send(&self.channels.p2p_to_sync_tx);
             }
             Response::DataColumnsByRoot(Some(data_column_sidecar)) => {
-                self.log(
-                    Level::Debug,
-                    format_args!(
-                        "received DataColumnsByRoot response chunk \
-                         (request_id: {request_id}, peer_id: {peer_id}, blob_sidecar.slot: {:?})",
-                        data_column_sidecar.signed_block_header.message.slot,
-                    ),
+                debug!(
+                    "received DataColumnsByRoot response chunk \
+                    (request_id: {request_id}, peer_id: {peer_id}, blob_sidecar.slot: {:?})",
+                    data_column_sidecar.signed_block_header.message.slot,
                 );
 
                 let data_column_identifier: DataColumnIdentifier =
                     data_column_sidecar.as_ref().into();
                 let data_column_sidecar_slot = data_column_sidecar.signed_block_header.message.slot;
 
-                self.log_with_feature(format_args!(
+                debug!(
                     "received data column sidecar from RPC (identifier: {data_column_identifier:?}, slot: {data_column_sidecar_slot}, peer_id: {peer_id}, request_id: {request_id})",
-                ));
+                );
 
                 // if self.register_new_received_data_column_sidecar(
                 //     data_column_identifier,
@@ -1573,9 +1519,23 @@ impl<P: Preset> Network<P> {
                 // .send(&self.channels.p2p_to_sync_tx);
             }
             Response::DataColumnsByRoot(None) => {
-                self.log_with_feature(format_args!(
-                    "peer {peer_id} terminated DataColumnsByRoot response stream for request_id: {request_id}",
-                ));
+                debug!("peer {peer_id} terminated DataColumnsByRoot response stream for request_id: {request_id}");
+            }
+            Response::LightClientBootstrap(_) => {
+                // TODO(Altair Light Client Sync Protocol)
+                debug!("received LightClientBootstrap response chunk (peer_id: {peer_id})");
+            }
+            Response::LightClientFinalityUpdate(_) => {
+                // TODO(Altair Light Client Sync Protocol)
+                debug!("received LightClientFinalityUpdate response (peer_id: {peer_id})");
+            }
+            Response::LightClientOptimisticUpdate(_) => {
+                // TODO(Altair Light Client Sync Protocol)
+                debug!("received LightClientOptimisticUpdate response (peer_id: {peer_id})");
+            }
+            Response::LightClientUpdatesByRange(_) => {
+                // TODO(Altair Light Client Sync Protocol)
+                debug!("received LightClientUpdatesByRange response (peer_id: {peer_id})");
             }
         }
     }
@@ -1654,9 +1614,9 @@ impl<P: Preset> Network<P> {
 
                 let (subnet_id, data_column_sidecar) = *data;
 
-                self.log_with_feature(format_args!(
+                debug!(
                     "received data column sidecar as gossip in subnet {subnet_id}: {data_column_sidecar:?} from {source}",
-                ));
+                );
 
                 let chain_config = self.controller.chain_config().as_ref();
                 let epoch = misc::compute_epoch_at_slot::<P>(data_column_sidecar.slot());
@@ -1676,10 +1636,10 @@ impl<P: Preset> Network<P> {
                         block_seen,
                     );
                 } else {
-                    self.log_with_feature(format_args!(
+                    debug!(
                         "ignoring pre-eip7594 data column sidecar in slot {} / {epoch}",
                         data_column_sidecar.slot(),
-                    ));
+                    );
                 }
             }
             PubsubMessage::AggregateAndProofAttestation(aggregate_and_proof) => {
@@ -2074,30 +2034,23 @@ impl<P: Preset> Network<P> {
             .collect::<Vec<_>>();
 
         if data_column_identifiers.is_empty() {
-            self.log(
-                Level::Debug,
-                format_args!(
-                    "cannot request DataColumnSidecarsByRoot: all requested data column sidecars have been received",
-                ),
+            debug!(
+                "cannot request DataColumnSidecarsByRoot: all requested data column sidecars have been received",
             );
 
             return;
         }
 
         let request = DataColumnsByRootRequest::new(
-            data_column_identifiers
-                .try_into()
-                .expect("length is under maximum"),
+            self.controller.chain_config(),
+            data_column_identifiers.into_iter(),
         );
 
-        self.log(
-            Level::Debug,
-            format_args!(
-                "sending DataColumnSidecarsByRoot request (request_id: {request_id}, peer_id: {peer_id}, request: {request:?})",
-            ),
+        debug!(
+            "sending DataColumnSidecarsByRoot request (request_id: {request_id}, peer_id: {peer_id}, request: {request:?})",
         );
 
-        self.request(peer_id, request_id, Request::DataColumnsByRoot(request));
+        self.request(peer_id, request_id, RequestType::DataColumnsByRoot(request));
     }
 
     fn subscribe_to_core_topics(&mut self) {
@@ -2232,26 +2185,6 @@ impl<P: Preset> Network<P> {
             .is_none()
     }
 
-    /// Log a message with peer count information.
-    fn log(&self, level: Level, message: impl Display) {
-        log(
-            level,
-            self.network_globals.connected_peers(),
-            self.target_peers,
-            message,
-        );
-    }
-
-    fn log_with_feature(&self, message: impl Display) {
-        features::log!(
-            DebugP2p,
-            "[Peers: {}/{}] {}",
-            self.network_globals.connected_peers(),
-            self.target_peers,
-            message,
-        );
-    }
-
     fn ensure_peer_connected(&self, peer_id: Option<PeerId>) -> Option<PeerId> {
         peer_id
             .filter(|peer_id| self.network_globals.is_peer_connected(peer_id))
@@ -2281,6 +2214,7 @@ impl<P: Preset> Network<P> {
             );
 
             metrics.set_collection_length(
+                module_path!(),
                 &type_name,
                 "received_data_column_sidecars",
                 self.received_data_column_sidecars.len(),
@@ -2340,7 +2274,7 @@ fn run_network_service<P: Preset>(
                             service.goodbye_peer(&peer_id, goodbye_reason, report_source);
                         }
                         ServiceInboundMessage::Publish(message) => {
-                            service.publish(vec![message]);
+                            service.publish(message);
                         }
                         ServiceInboundMessage::ReportPeer(peer_id, action, source, msg) => {
                             service.report_peer(&peer_id, action, source, msg);

@@ -1057,6 +1057,27 @@ impl<P: Preset> Store<P> {
         None
     }
 
+    pub fn validate_block_for_gossip(
+        &self,
+        block: &Arc<SignedBeaconBlock<P>>,
+        state_transition_for_gossip: impl FnOnce(&ChainLink<P>) -> Result<Option<BlockAction<P>>>,
+    ) -> Result<Option<BlockAction<P>>> {
+        let block_root = block.message().hash_tree_root();
+        let block_action = self.validate_gossip_rules(block, block_root);
+
+        if let Some(action) = block_action {
+            return Ok(Some(action));
+        }
+
+        // > Parent block must be known
+        let Some(parent) = self.chain_link(block.message().parent_root()) else {
+            return Ok(Some(BlockAction::DelayUntilParent(block.clone_arc())));
+        };
+
+        // > Check the block is valid and compute the post-state
+        state_transition_for_gossip(parent)
+    }
+
     pub fn validate_block_with_custom_state_transition(
         &self,
         block: &Arc<SignedBeaconBlock<P>>,
@@ -1925,12 +1946,12 @@ impl<P: Preset> Store<P> {
         );
 
         // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
-        ensure!(
-            verify_kzg_proofs(&data_column_sidecar).unwrap_or(false),
+        verify_kzg_proofs(&data_column_sidecar).map_err(|error| {
             Error::DataColumnSidecarInvalid {
-                data_column_sidecar
+                data_column_sidecar: data_column_sidecar.clone_arc(),
+                error,
             }
-        );
+        })?;
 
         // [REJECT] The sidecar's block's parent (defined by block_header.parent_root) passes validation.
         // Part 1/2:

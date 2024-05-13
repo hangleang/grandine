@@ -410,7 +410,7 @@ impl SyncManager {
         data_column_identifiers: Vec<DataColumnIdentifier>,
         peer_id: PeerId,
     ) -> Vec<DataColumnIdentifier> {
-        self.log_with_feature(format_args!(
+        self.log(Level::Debug, format_args!(
             "add data column request by root (identifiers: {data_column_identifiers:?}, peer_id: {peer_id})",
         ));
 

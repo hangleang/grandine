@@ -115,6 +115,7 @@ impl SyncToMetrics {
 
 pub enum SyncToP2p {
     PruneReceivedBlocks,
+    ReportPeer(PeerId, PeerAction, ReportSource, PeerReportReason),
     // RequestDataColumnsByRange(RequestId, PeerId, Slot, u64),
     RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnIdentifier>),
     RequestBlobsByRange(RequestId, PeerId, Slot, u64),
