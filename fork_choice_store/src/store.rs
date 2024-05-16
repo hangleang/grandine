@@ -2004,7 +2004,6 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         // [REJECT] The sidecar is for the correct subnet -- i.e. compute_subnet_for_data_column_sidecar(sidecar.index) == subnet_id.
         if let Some(actual) = origin.subnet_id() {
             let expected = misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
-
             ensure!(
                 actual == expected,
                 Error::DataColumnSidecarOnIncorrectSubnet {
@@ -2018,9 +2017,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         // [IGNORE] The sidecar is not from a future slot (with a MAXIMUM_GOSSIP_CLOCK_DISPARITY allowance) -- i.e. validate that block_header.slot <= current_slot
         // (a client MAY queue future sidecars for processing at the appropriate slot).
         if self.slot() < block_header.slot {
-            return Ok(DataColumnSidecarAction::Ignore(false));
-            // TODO(feature/fulu): switch to this once `DelayUntilSlot` implemented
-            // return Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar));
+            return Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar));
         }
 
         // [IGNORE] The sidecar is from a slot greater than the latest finalized slot -- i.e. validate that block_header.slot > compute_start_slot_at_epoch(state.finalized_checkpoint.epoch)
@@ -2038,7 +2035,16 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             return Ok(DataColumnSidecarAction::Ignore(true));
         }
 
-        let state = state_fn()?;
+        let state = match state_fn() {
+            Ok(state) => state,
+            Err(error) => {
+                if let Some(StateCacheError::StateFarBehind { .. }) = error.downcast_ref() {
+                    return Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar));
+                }
+
+                bail!(error);
+            }
+        };
 
         // [REJECT] The proposer signature of sidecar.signed_block_header, is valid with respect to the block_header.proposer_index pubkey.
         SingleVerifier.verify_singular(
@@ -2066,9 +2072,9 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
 
         // [IGNORE] The sidecar's block's parent (defined by block_header.parent_root) has been seen (via both gossip and non-gossip sources) (a client MAY queue sidecars for processing once the parent block is retrieved).
         let Some((parent, parent_payload_status)) = parent_info() else {
-            return Ok(DataColumnSidecarAction::Ignore(true));
-            // TODO(feature/fulu): switch to this once `DelayUntilParent` implemented
-            // return Ok(DataColumnSidecarAction::DelayUntilParent(data_column_sidecar));
+            return Ok(DataColumnSidecarAction::DelayUntilParent(
+                data_column_sidecar,
+            ));
         };
 
         // [REJECT] The sidecar's block's parent (defined by block_header.parent_root) passes validation.
