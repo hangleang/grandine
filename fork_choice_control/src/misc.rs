@@ -6,7 +6,7 @@ use derivative::Derivative;
 use eth2_libp2p::GossipId;
 use fork_choice_store::{
     AggregateAndProofAction, AggregateAndProofOrigin, AttestationAction, AttestationItem,
-    AttestationValidationError, BlobSidecarOrigin, BlockOrigin, ChainLink,
+    AttestationValidationError, BlobSidecarOrigin, BlockOrigin, ChainLink, DataColumnSidecarOrigin,
 };
 use serde::Serialize;
 use strum::IntoStaticStr;
@@ -16,7 +16,7 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    eip7594::DataColumnIdentifier,
+    eip7594::{DataColumnIdentifier, DataColumnSidecar},
     phase0::primitives::ValidatorIndex,
     preset::Preset,
 };
@@ -31,6 +31,7 @@ pub struct Delayed<P: Preset> {
     pub aggregates: Vec<PendingAggregateAndProof<P>>,
     pub attestations: Vec<PendingAttestation<P>>,
     pub blob_sidecars: Vec<PendingBlobSidecar<P>>,
+    pub data_column_sidecars: Vec<PendingDataColumnSidecar<P>>,
 }
 
 impl<P: Preset> Delayed<P> {
@@ -41,12 +42,14 @@ impl<P: Preset> Delayed<P> {
             aggregates,
             attestations,
             blob_sidecars,
+            data_column_sidecars,
         } = self;
 
         blocks.is_empty()
             && aggregates.is_empty()
             && attestations.is_empty()
             && blob_sidecars.is_empty()
+            && data_column_sidecars.is_empty()
     }
 }
 
@@ -103,6 +106,14 @@ pub struct PendingBlobSidecar<P: Preset> {
     pub blob_sidecar: Arc<BlobSidecar<P>>,
     pub block_seen: bool,
     pub origin: BlobSidecarOrigin,
+    pub submission_time: Instant,
+}
+
+#[derive(Debug)]
+pub struct PendingDataColumnSidecar<P: Preset> {
+    pub data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    pub block_seen: bool,
+    pub origin: DataColumnSidecarOrigin,
     pub submission_time: Instant,
 }
 
