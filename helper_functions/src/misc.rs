@@ -23,7 +23,7 @@ use types::{
             Blob, BlobCommitmentInclusionProof, BlobIndex, KzgCommitment, KzgProof, VersionedHash,
         },
     },
-    eip7594::{ColumnIndex, DATA_COLUMN_SIDECAR_SUBNET_COUNT},
+    eip7594::ColumnIndex,
     phase0::{
         consts::{
             AttestationSubnetCount, BLS_WITHDRAWAL_PREFIX, ETH1_ADDRESS_WITHDRAWAL_PREFIX,
@@ -293,8 +293,11 @@ pub fn compute_subnet_for_blob_sidecar<P: Preset>(
 
 // source: https://github.com/ethereum/consensus-specs/pull/3574/files/cebf78a83e6fc8fa237daf4264b9ca0fe61473f4#diff-96cf4db15bede3d60f04584fb25339507c35755959159cdbe19d760ca92de109R106
 #[must_use]
-pub const fn compute_subnet_for_data_column_sidecar(column_index: ColumnIndex) -> SubnetId {
-    column_index % DATA_COLUMN_SIDECAR_SUBNET_COUNT
+pub const fn compute_subnet_for_data_column_sidecar(
+    config: &Config,
+    column_index: ColumnIndex,
+) -> SubnetId {
+    column_index % config.data_column_sidecar_subnet_count
 }
 
 /// <https://github.com/ethereum/consensus-specs/blob/v1.1.0/specs/altair/validator.md#broadcast-sync-committee-message>
@@ -671,6 +674,18 @@ pub fn get_max_effective_balance<P: Preset>(validator: &Validator) -> Gwei {
     } else {
         P::MIN_ACTIVATION_BALANCE
     }
+}
+
+#[must_use]
+pub fn data_column_serve_range_slot<P: Preset>(config: &Config, current_slot: Slot) -> Slot {
+    let current_epoch = compute_epoch_at_slot::<P>(current_slot);
+    let epoch = config.eip7594_fork_epoch.max(
+        current_epoch
+            .checked_sub(config.min_epochs_for_data_column_sidecars_requests)
+            .unwrap_or(GENESIS_EPOCH),
+    );
+
+    compute_start_slot_at_epoch::<P>(epoch)
 }
 
 #[cfg(test)]

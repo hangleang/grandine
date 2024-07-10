@@ -61,6 +61,8 @@ pub enum SignatureKind {
     AggregateAndProof,
     #[display("attestation signature")]
     Attestation,
+    #[display("blob sidecar signature")]
+    BlobSidecar,
     #[display("block signature in blob sidecar")]
     BlockInBlobSidecar,
     #[display("block signature")]

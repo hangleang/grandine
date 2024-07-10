@@ -31,6 +31,7 @@ use futures::{
     stream::StreamExt as _,
 };
 use helper_functions::{accessors, misc};
+use itertools::Itertools;
 use log::{debug, error, info, trace, warn};
 use logging::PEER_LOG_METRICS;
 use operation_pools::{BlsToExecutionChangePool, Origin, PoolToP2pMessage, SyncCommitteeAggPool};
@@ -49,10 +50,7 @@ use types::{
     capella::containers::SignedBlsToExecutionChange,
     combined::{Attestation, AttesterSlashing, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{
-        ColumnIndex, DataColumnIdentifier, DataColumnSidecar, NumberOfColumns,
-        DATA_COLUMN_SIDECAR_SUBNET_COUNT,
-    },
+    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
     electra::containers::{Attestation as ElectraAttestation, SingleAttestation},
     nonstandard::{Phase, RelativeEpoch, WithStatus},
     phase0::{
@@ -245,6 +243,10 @@ impl<P: Preset> Network<P> {
                             self.publish_blob_sidecar(blob_sidecar);
                             true
                         },
+                        ApiToP2p::PublishDataColumnSidecar(data_column_sidecar) => {
+                            self.publish_data_column_sidecar(data_column_sidecar);
+                            true
+                        },
                         ApiToP2p::PublishAggregateAndProof(aggregate_and_proof) => {
                             self.publish_aggregate_and_proof(aggregate_and_proof);
                             true
@@ -379,6 +381,15 @@ impl<P: Preset> Network<P> {
                         P2pMessage::HeadState(_state) => {
                             // This message is only used in tests
                         }
+                        P2pMessage::DataColumnsReconstructed(data_column_sidecars, slot) => {
+                            debug!(
+                                "propagating data column sidecars after reconstructed (indexes: [{}], slot: {slot})",
+                                data_column_sidecars.iter().map(|c| c.index).join(", "),
+                            );
+                            for data_column_sidecar in data_column_sidecars {
+                                self.publish_data_column_sidecar(data_column_sidecar);
+                            }
+                        }
                     }
                 },
 
@@ -453,8 +464,8 @@ impl<P: Preset> Network<P> {
                         SyncToP2p::RequestDataColumnsByRoot(request_id, peer_id, identifiers) => {
                             self.request_data_columns_by_root(request_id, peer_id, identifiers);
                         }
-                        SyncToP2p::RequestDataColumnsByRange(request_id, peer_id, start_slot, count, columns) => {
-                            self.request_data_columns_by_range(request_id, peer_id, start_slot, count, columns);
+                        SyncToP2p::RequestDataColumnsByRange(request_id, peer_id, start_slot, count, peer_custody_columns) => {
+                            self.request_data_columns_by_range(request_id, peer_id, start_slot, count, peer_custody_columns);
                         }
                         SyncToP2p::RequestPeerStatus(request_id, peer_id) => {
                             self.request_peer_status(request_id, peer_id);
@@ -605,7 +616,11 @@ impl<P: Preset> Network<P> {
     }
 
     fn publish_data_column_sidecar(&self, data_column_sidecar: Arc<DataColumnSidecar<P>>) {
-        let subnet_id = misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
+        let subnet_id = misc::compute_subnet_for_data_column_sidecar(
+            self.controller.chain_config(),
+            data_column_sidecar.index,
+        );
+
         let data_column_identifier: DataColumnIdentifier = data_column_sidecar.as_ref().into();
 
         debug!(
@@ -1186,12 +1201,18 @@ impl<P: Preset> Network<P> {
                     .into_iter()
                     .take(max_request_data_column_sidecars);
 
-                let data_column_sidecars = controller.data_column_sidecars_by_ids(data_column_ids)?;
+                let data_column_sidecars =
+                    controller.data_column_sidecars_by_ids(data_column_ids)?;
 
                 for data_column_sidecar in data_column_sidecars {
+                    let data_column_identifier: DataColumnIdentifier =
+                        data_column_sidecar.as_ref().into();
+
                     debug!(
                         "sending DataColumnsSidecarsByRoot response chunk \
-                        (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, data_column_sidecar: {data_column_sidecar:?})",
+                        (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, \
+                        slot: {}, id: {data_column_identifier:?})",
+                        data_column_sidecar.slot(),
                     );
 
                     ServiceInboundMessage::SendResponse(
@@ -1249,14 +1270,12 @@ impl<P: Preset> Network<P> {
                 .max_request_data_column_sidecars,
         );
 
-        let current_slot = self.controller.head_slot();
         let end_slot = start_slot
             .checked_add(difference)
             .ok_or(Error::EndSlotOverflow {
                 start_slot,
                 difference,
-            })?
-            .min(current_slot);
+            })?;
 
         let network_to_service_tx = self.network_to_service_tx.clone();
 
@@ -1264,7 +1283,7 @@ impl<P: Preset> Network<P> {
             .spawn(async move {
                 let mut data_column_sidecars = controller.data_column_sidecars_by_range(start_slot..end_slot, &columns)?;
 
-                // The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
+                // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
                 data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
                 for data_column_sidecar in data_column_sidecars {
@@ -1282,7 +1301,7 @@ impl<P: Preset> Network<P> {
                     .send(&network_to_service_tx);
                 }
 
-                debug!("terminating BlobSidecarsByRange response stream");
+                debug!("terminating DataColumnSidecarsByRange response stream");
 
                 ServiceInboundMessage::SendResponse(
                     peer_id,
@@ -1549,68 +1568,72 @@ impl<P: Preset> Network<P> {
                     request_id: {request_id}",
                 );
             }
-            // TODO(feature/eip7594): This appears to be unfinished.
-            // > Before consuming the next response chunk, the response reader SHOULD verify the
-            // > data column sidecar is well-formatted, has valid inclusion proof, and is correct w.r.t. the expected KZG commitments
             Response::DataColumnsByRange(Some(data_column_sidecar)) => {
+                let data_column_identifier = data_column_sidecar.as_ref().into();
+
                 debug!(
                     "received DataColumnsByRange response chunk \
-                    (request_id: {request_id}, peer_id: {peer_id}, data_column_sidecar.slot: {:?})",
-                    data_column_sidecar.signed_block_header.message.slot,
+                    (request_id: {request_id}, peer_id: {peer_id}, \
+                    slot: {}, data_column: {data_column_sidecar:?})",
+                    data_column_sidecar.slot(),
                 );
 
-                let data_column_identifier = data_column_sidecar.as_ref().into();
-                let data_column_sidecar_slot = data_column_sidecar.signed_block_header.message.slot;
+                info!(
+                    "received data column sidecar from RPC slot: {}, id: {data_column_identifier:?}",
+                    data_column_sidecar.slot(),
+                );
 
                 if self.register_new_received_data_column_sidecar(
                     data_column_identifier,
-                    data_column_sidecar_slot,
+                    data_column_sidecar.slot(),
                 ) {
-                    P2pToSync::RequestedDataColumnSidecar(data_column_sidecar, peer_id)
+                    let block_seen = self
+                        .received_block_roots
+                        .contains_key(&data_column_identifier.block_root);
+
+                    P2pToSync::RequestedDataColumnSidecar(data_column_sidecar, block_seen, peer_id)
                         .send(&self.channels.p2p_to_sync_tx);
                 }
             }
             Response::DataColumnsByRange(None) => {
-                debug!(
-                    "peer {peer_id} terminated DataColumnsByRange response stream for request_id: {request_id}",
-                );
+                debug!("peer {peer_id} terminated DataColumnsByRange response stream for request_id: {request_id}");
 
                 P2pToSync::DataColumnsByRangeRequestFinished(request_id)
                     .send(&self.channels.p2p_to_sync_tx);
             }
             Response::DataColumnsByRoot(Some(data_column_sidecar)) => {
+                let data_column_identifier = data_column_sidecar.as_ref().into();
+
                 debug!(
                     "received DataColumnsByRoot response chunk \
-                    (request_id: {request_id}, peer_id: {peer_id}, blob_sidecar.slot: {:?})",
-                    data_column_sidecar.signed_block_header.message.slot,
+                    (request_id: {request_id}, peer_id: {peer_id}, \
+                    slot: {}, data_column: {data_column_sidecar:?})",
+                    data_column_sidecar.slot(),
                 );
 
-                let data_column_identifier: DataColumnIdentifier =
-                    data_column_sidecar.as_ref().into();
-                let data_column_sidecar_slot = data_column_sidecar.signed_block_header.message.slot;
-
-                debug!(
-                    "received data column sidecar from RPC (identifier: {data_column_identifier:?}, slot: {data_column_sidecar_slot}, peer_id: {peer_id}, request_id: {request_id})",
+                info!(
+                    "received data column sidecar from RPC slot: {}, id: {data_column_identifier:?}",
+                    data_column_sidecar.slot(),
                 );
 
-                // if self.register_new_received_data_column_sidecar(
-                //     data_column_identifier,
-                //     data_column_sidecar_slot,
-                // ) {
-                //     let block_seen = self
-                //         .received_block_roots
-                //         .contains_key(&data_column_identifier.block_root);
+                if self.register_new_received_data_column_sidecar(
+                    data_column_identifier,
+                    data_column_sidecar.slot(),
+                ) {
+                    let block_seen = self
+                        .received_block_roots
+                        .contains_key(&data_column_identifier.block_root);
 
-                //     P2pToSync::RequestedDataColumnSidecar(data_column_sidecar, block_seen, peer_id)
-                //         .send(&self.channels.p2p_to_sync_tx);
-                // }
+                    P2pToSync::RequestedDataColumnSidecar(data_column_sidecar, block_seen, peer_id)
+                        .send(&self.channels.p2p_to_sync_tx);
+                }
 
-                // P2pToSync::DataColumnsByRootChunkReceived(
-                //     data_column_identifier,
-                //     peer_id,
-                //     request_id,
-                // )
-                // .send(&self.channels.p2p_to_sync_tx);
+                P2pToSync::DataColumnsByRootChunkReceived(
+                    data_column_identifier,
+                    peer_id,
+                    request_id,
+                )
+                .send(&self.channels.p2p_to_sync_tx);
             }
             Response::DataColumnsByRoot(None) => {
                 debug!("peer {peer_id} terminated DataColumnsByRoot response stream for request_id: {request_id}");
@@ -1707,26 +1730,23 @@ impl<P: Preset> Network<P> {
                 }
 
                 let (subnet_id, data_column_sidecar) = *data;
+                let data_column_identifier: DataColumnIdentifier =
+                    data_column_sidecar.as_ref().into();
 
                 debug!(
-                    "received data column sidecar as gossip in subnet {subnet_id}: {data_column_sidecar:?} from {source}",
+                    "received data column sidecar as gossip in subnet {subnet_id}: {data_column_identifier:?} from {source}",
                 );
 
-                let chain_config = self.controller.chain_config().as_ref();
-                let epoch = misc::compute_epoch_at_slot::<P>(data_column_sidecar.slot());
+                let block_seen = self
+                    .received_block_roots
+                    .contains_key(&data_column_identifier.block_root);
 
-                if chain_config.is_eip7594_fork(epoch) {
-                    self.controller.on_gossip_data_column_sidecar(
-                        data_column_sidecar,
-                        subnet_id,
-                        GossipId { source, message_id },
-                    );
-                } else {
-                    debug!(
-                        "ignoring pre-eip7594 data column sidecar in slot {} / {epoch}",
-                        data_column_sidecar.slot(),
-                    );
-                }
+                self.controller.on_gossip_data_column_sidecar(
+                    data_column_sidecar,
+                    subnet_id,
+                    GossipId { source, message_id },
+                    block_seen,
+                );
             }
             PubsubMessage::AggregateAndProofAttestation(aggregate_and_proof) => {
                 if let Some(metrics) = self.metrics.as_ref() {
@@ -2114,17 +2134,19 @@ impl<P: Preset> Network<P> {
         peer_id: PeerId,
         start_slot: Slot,
         count: u64,
-        columns: Arc<ContiguousList<ColumnIndex, NumberOfColumns>>,
+        peer_custody_columns: Vec<ColumnIndex>,
     ) {
         // TODO: is count capped in eth2_libp2p?
         let request = DataColumnsByRangeRequest {
             start_slot,
             count,
-            columns,
+            columns: ContiguousList::try_from(peer_custody_columns)
+                .expect("fail to parse custody_columns"),
         };
 
         debug!(
-            "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, request: {request:?})",
+            "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, \
+            request: {request:?})",
         );
 
         self.request(
@@ -2149,7 +2171,6 @@ impl<P: Preset> Network<P> {
             debug!(
                 "cannot request DataColumnSidecarsByRoot: all requested data column sidecars have been received",
             );
-
             return;
         }
 
@@ -2159,7 +2180,8 @@ impl<P: Preset> Network<P> {
         );
 
         debug!(
-            "sending DataColumnSidecarsByRoot request (request_id: {request_id}, peer_id: {peer_id}, request: {request:?})",
+            "sending DataColumnSidecarsByRoot request (request_id: {request_id}, peer_id: {peer_id}, \
+            request: {request:?})",
         );
 
         self.request(peer_id, request_id, RequestType::DataColumnsByRoot(request));
@@ -2189,12 +2211,13 @@ impl<P: Preset> Network<P> {
     }
 
     fn subscribe_to_data_column_topics(&mut self) {
-        // TODO(das): for now, subscribe to all data column sidecar subnets
-        for subnet_id in 0..DATA_COLUMN_SIDECAR_SUBNET_COUNT {
-            let subnet = Subnet::DataColumn(subnet_id);
+        for subnet_id in &self.network_globals.sampling_subnets {
+            let subnet = Subnet::DataColumn(*subnet_id);
 
             if let Some(topic) = self.subnet_gossip_topic(subnet) {
                 ServiceInboundMessage::Subscribe(topic).send(&self.network_to_service_tx);
+            } else {
+                warn!("Could not subscribe to gossipsub topic on subnet_id: {subnet_id}");
             }
         }
     }
@@ -2400,7 +2423,7 @@ fn run_network_service<P: Preset>(
                         }
                         ServiceInboundMessage::SendRequest(peer_id, request_id, request) => {
                             if let Err(error) = service.send_request(peer_id, request_id, request) {
-                                warn!("Unable to send request to peer: {peer_id}: {error:?}");
+                                warn!("Unable to send request to peer: {peer_id}: {error:?} on request: {request_id}");
                             }
                         }
                         ServiceInboundMessage::SendResponse(peer_id, peer_request_id, request_id, response) => {

@@ -12,12 +12,11 @@ use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use log::debug;
 use operation_pools::PoolRejectionReason;
 use serde::Serialize;
-use ssz::ContiguousList;
 use types::{
     altair::containers::{SignedContributionAndProof, SyncCommitteeMessage},
     combined::{Attestation, AttesterSlashing, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, NumberOfColumns},
+    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
     nonstandard::Phase,
     phase0::{
         containers::{ProposerSlashing, SignedVoluntaryExit},
@@ -44,13 +43,14 @@ pub enum P2pToSync<P: Preset> {
     DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot, Option<PeerId>),
     RequestedBlobSidecar(Arc<BlobSidecar<P>>, bool, PeerId),
     RequestedBlock((Arc<SignedBeaconBlock<P>>, PeerId, RequestId)),
-    RequestedDataColumnSidecar(Arc<DataColumnSidecar<P>>, PeerId),
+    RequestedDataColumnSidecar(Arc<DataColumnSidecar<P>>, bool, PeerId),
     BlobsByRangeRequestFinished(RequestId),
     BlobsByRootChunkReceived(BlobIdentifier, PeerId, RequestId),
     BlocksByRangeRequestFinished(RequestId),
     BlockByRootRequestFinished(H256),
     DataColumnsByRangeRequestFinished(RequestId),
     RequestFailed(PeerId),
+    DataColumnsByRootChunkReceived(DataColumnIdentifier, PeerId, RequestId),
 }
 
 impl<P: Preset> P2pToSync<P> {
@@ -66,6 +66,7 @@ impl<P: Preset> P2pToSync<P> {
 pub enum ApiToP2p<P: Preset> {
     PublishBeaconBlock(Arc<SignedBeaconBlock<P>>),
     PublishBlobSidecar(Arc<BlobSidecar<P>>),
+    PublishDataColumnSidecar(Arc<DataColumnSidecar<P>>),
     PublishSingularAttestation(Arc<Attestation<P>>, SubnetId),
     PublishAggregateAndProof(Arc<SignedAggregateAndProof<P>>),
     PublishSyncCommitteeMessage(Box<(SubnetId, SyncCommitteeMessage)>),
@@ -117,13 +118,7 @@ impl SyncToMetrics {
 pub enum SyncToP2p {
     PruneReceivedBlocks,
     ReportPeer(PeerId, PeerAction, ReportSource, PeerReportReason),
-    RequestDataColumnsByRange(
-        RequestId,
-        PeerId,
-        Slot,
-        u64,
-        Arc<ContiguousList<ColumnIndex, NumberOfColumns>>,
-    ),
+    RequestDataColumnsByRange(RequestId, PeerId, Slot, u64, Vec<ColumnIndex>),
     RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnIdentifier>),
     RequestBlobsByRange(RequestId, PeerId, Slot, u64),
     RequestBlobsByRoot(RequestId, PeerId, Vec<BlobIdentifier>),

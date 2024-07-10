@@ -553,6 +553,7 @@ impl NetworkConfigOptions {
         network_config.libp2p_private_key_file = libp2p_private_key_file;
         network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
         network_config.outbound_rate_limiter_config = Some(OutboundRateLimiterConfig::default());
+        network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
 
         if let Some(listen_address_ipv6) = listen_address_ipv6 {
             network_config.set_ipv4_ipv6_listening_addresses(
@@ -615,6 +616,9 @@ impl NetworkConfigOptions {
 
         if Feature::SubscribeToAllAttestationSubnets.is_enabled() {
             network_config.subscribe_all_subnets = true;
+        }
+
+        if Feature::SubscribeToAllDataColumnSubnets.is_enabled() {
             network_config.subscribe_all_data_column_subnets = true;
         }
 
@@ -1188,7 +1192,11 @@ impl GrandineArgs {
             .into_iter()
             .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllAttestationSubnets))
             .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllSyncCommitteeSubnets))
-            .collect();
+            .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllDataColumnSubnets))
+            .collect::<Vec<_>>();
+
+        // enabling these features here, because it being used in below network config conversion
+        features.iter().for_each(|f| f.enable());
 
         let auth_options = AuthOptions {
             secrets_path: jwt_secret,

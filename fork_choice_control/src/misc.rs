@@ -109,6 +109,7 @@ pub struct PendingBlobSidecar<P: Preset> {
 #[derive(Debug)]
 pub struct PendingDataColumnSidecar<P: Preset> {
     pub data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    pub block_seen: bool,
     pub origin: DataColumnSidecarOrigin,
     pub submission_time: Instant,
 }

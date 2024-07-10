@@ -10,6 +10,7 @@
 
 use core::panic::AssertUnwindSafe;
 use std::{
+    collections::HashSet,
     sync::{mpsc::Sender, Arc},
     thread::{Builder, JoinHandle},
     time::Instant,
@@ -38,7 +39,7 @@ use types::{
     },
     config::Config as ChainConfig,
     deneb::containers::BlobSidecar,
-    eip7594::DataColumnSidecar,
+    eip7594::{ColumnIndex, DataColumnSidecar},
     nonstandard::ValidationOutcome,
     phase0::primitives::{ExecutionBlockHash, Slot, SubnetId},
     preset::Preset,
@@ -186,6 +187,10 @@ where
         self.storage().config()
     }
 
+    pub fn on_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        self.spawn_store_sample_columns(sample_columns)
+    }
+
     // This should be called at the start of every tick.
     // More or less frequent calls are allowed but may worsen performance and quality of the head.
     // According to the Fork Choice specification, `on_tick` should be called every second,
@@ -238,12 +243,21 @@ where
         self.spawn_data_column_sidecar_task_with_wait_group(
             wait_group,
             data_column_sidecar,
+            true,
             DataColumnSidecarOrigin::Own,
         )
     }
 
-    pub fn on_api_data_column_sidecar(&self, data_column_sidecar: Arc<DataColumnSidecar<P>>) {
-        self.spawn_data_column_sidecar_task(data_column_sidecar, DataColumnSidecarOrigin::Api)
+    pub fn on_api_data_column_sidecar(
+        &self,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        sender: Option<OneshotSender<Result<ValidationOutcome>>>,
+    ) {
+        self.spawn_data_column_sidecar_task(
+            data_column_sidecar,
+            true,
+            DataColumnSidecarOrigin::Api(sender),
+        )
     }
 
     pub fn on_api_block(
@@ -438,12 +452,14 @@ where
 
     pub fn on_gossip_data_column_sidecar(
         &self,
-        blob_sidecar: Arc<DataColumnSidecar<P>>,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
         subnet_id: SubnetId,
         gossip_id: GossipId,
+        block_seen: bool,
     ) {
         self.spawn_data_column_sidecar_task(
-            blob_sidecar,
+            data_column_sidecar,
+            block_seen,
             DataColumnSidecarOrigin::Gossip(subnet_id, gossip_id),
         )
     }
@@ -469,6 +485,7 @@ where
     pub fn on_requested_data_column_sidecar(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        block_seen: bool,
         peer_id: PeerId,
     ) {
         self.spawn(DataColumnSidecarTask {
@@ -476,6 +493,7 @@ where
             mutator_tx: self.owned_mutator_tx(),
             wait_group: self.owned_wait_group(),
             data_column_sidecar,
+            block_seen,
             origin: DataColumnSidecarOrigin::Requested(peer_id),
             submission_time: Instant::now(),
             metrics: self.metrics.clone(),
@@ -535,11 +553,13 @@ where
     fn spawn_data_column_sidecar_task(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        block_seen: bool,
         origin: DataColumnSidecarOrigin,
     ) {
         self.spawn_data_column_sidecar_task_with_wait_group(
             self.owned_wait_group(),
             data_column_sidecar,
+            block_seen,
             origin,
         )
     }
@@ -548,6 +568,7 @@ where
         &self,
         wait_group: W,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        block_seen: bool,
         origin: DataColumnSidecarOrigin,
     ) {
         self.spawn(DataColumnSidecarTask {
@@ -555,6 +576,7 @@ where
             mutator_tx: self.owned_mutator_tx(),
             wait_group,
             data_column_sidecar,
+            block_seen,
             origin,
             submission_time: Instant::now(),
             metrics: self.metrics.clone(),
@@ -582,6 +604,15 @@ where
             submission_time: Instant::now(),
             metrics: self.metrics.clone(),
         })
+    }
+
+    fn spawn_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        if !self.owned_store_snapshot().has_sample_columns_stored() {
+            MutatorMessage::StoreSampleColumns {
+                sample_columns: HashSet::from_iter(sample_columns),
+            }
+            .send(&self.owned_mutator_tx());
+        }
     }
 
     pub(crate) fn spawn(&self, task: impl Spawn<P, E, W>) {

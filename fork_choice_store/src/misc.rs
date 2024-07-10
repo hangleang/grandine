@@ -235,6 +235,7 @@ impl BlockOrigin {
 #[derive(Debug, AsRefStr)]
 pub enum AggregateAndProofOrigin<I> {
     Gossip(I),
+    GossipBatch(I),
     Api(OneshotSender<Result<ValidationOutcome>>),
 }
 
@@ -251,7 +252,7 @@ impl<I> AggregateAndProofOrigin<I> {
     #[must_use]
     pub fn split(self) -> (Option<I>, Option<OneshotSender<Result<ValidationOutcome>>>) {
         match self {
-            Self::Gossip(gossip_id) => (Some(gossip_id), None),
+            Self::Gossip(gossip_id) | Self::GossipBatch(gossip_id) => (Some(gossip_id), None),
             Self::Api(sender) => (None, Some(sender)),
         }
     }
@@ -259,7 +260,7 @@ impl<I> AggregateAndProofOrigin<I> {
     #[must_use]
     pub fn gossip_id(self) -> Option<I> {
         match self {
-            Self::Gossip(gossip_id) => Some(gossip_id),
+            Self::Gossip(gossip_id) | Self::GossipBatch(gossip_id) => Some(gossip_id),
             Self::Api(_) => None,
         }
     }
@@ -267,7 +268,7 @@ impl<I> AggregateAndProofOrigin<I> {
     #[must_use]
     pub const fn gossip_id_ref(&self) -> Option<&I> {
         match self {
-            Self::Gossip(gossip_id) => Some(gossip_id),
+            Self::Gossip(gossip_id) | Self::GossipBatch(gossip_id) => Some(gossip_id),
             Self::Api(_) => None,
         }
     }
@@ -276,13 +277,14 @@ impl<I> AggregateAndProofOrigin<I> {
     pub const fn verify_signatures(&self) -> bool {
         match self {
             Self::Gossip(_) | Self::Api(_) => true,
+            Self::GossipBatch(_) => false,
         }
     }
 
     #[must_use]
     pub const fn send_to_validator(&self) -> bool {
         match self {
-            Self::Gossip(_) | Self::Api(_) => true,
+            Self::Gossip(_) | Self::GossipBatch(_) | Self::Api(_) => true,
         }
     }
 
@@ -291,6 +293,7 @@ impl<I> AggregateAndProofOrigin<I> {
     pub const fn metrics_label(&self) -> &str {
         match self {
             Self::Gossip(_) => "Gossip",
+            Self::GossipBatch(_) => "GossipBatch",
             Self::Api(_) => "Api",
         }
     }
@@ -549,7 +552,7 @@ impl BlobSidecarOrigin {
 
 #[derive(Debug)]
 pub enum DataColumnSidecarOrigin {
-    Api,
+    Api(Option<OneshotSender<Result<ValidationOutcome>>>),
     Gossip(SubnetId, GossipId),
     Requested(PeerId),
     Own,
@@ -560,7 +563,7 @@ impl DataColumnSidecarOrigin {
     pub fn gossip_id(self) -> Option<GossipId> {
         match self {
             Self::Gossip(_, gossip_id) => Some(gossip_id),
-            Self::Api | Self::Own | Self::Requested(_) => None,
+            Self::Api(_) | Self::Own | Self::Requested(_) => None,
         }
     }
 
@@ -569,7 +572,7 @@ impl DataColumnSidecarOrigin {
         match self {
             Self::Gossip(_, gossip_id) => Some(gossip_id.source),
             Self::Requested(peer_id) => Some(*peer_id),
-            Self::Api | Self::Own => None,
+            Self::Api(_) | Self::Own => None,
         }
     }
 
@@ -577,7 +580,7 @@ impl DataColumnSidecarOrigin {
     pub const fn subnet_id(&self) -> Option<SubnetId> {
         match self {
             Self::Gossip(subnet_id, _) => Some(*subnet_id),
-            Self::Api | Self::Own | Self::Requested(_) => None,
+            Self::Api(_) | Self::Own | Self::Requested(_) => None,
         }
     }
 }

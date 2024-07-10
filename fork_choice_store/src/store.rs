@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Result};
 use arithmetic::NonZeroExt as _;
 use clock::Tick;
-use eip_7594::{verify_kzg_proofs, verify_sidecar_inclusion_proof};
+use eip_7594::{verify_data_column_sidecar, verify_kzg_proofs, verify_sidecar_inclusion_proof};
 use execution_engine::ExecutionEngine;
 use features::Feature;
 use hash_hasher::HashedMap;
@@ -31,7 +31,7 @@ use transition_functions::{
     combined,
     unphased::{self, ProcessSlots, StateRootPolicy},
 };
-use typenum::Unsigned as _;
+use typenum::Unsigned;
 use types::{
     combined::{
         Attestation, AttesterSlashing, AttestingIndices, BeaconState, SignedAggregateAndProof,
@@ -43,7 +43,7 @@ use types::{
         primitives::{BlobIndex, KzgCommitment},
     },
     eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, NumberOfColumns},
-    nonstandard::{BlobSidecarWithId, PayloadStatus, Phase, WithStatus},
+    nonstandard::{BlobSidecarWithId, DataColumnSidecarWithId, PayloadStatus, Phase, WithStatus},
     phase0::{
         consts::{ATTESTATION_PROPAGATION_SLOT_RANGE, GENESIS_EPOCH, GENESIS_SLOT},
         containers::{AttestationData, Checkpoint},
@@ -62,16 +62,15 @@ use crate::{
         AggregateAndProofAction, AggregateAndProofOrigin, ApplyBlockChanges, ApplyTickChanges,
         AttestationAction, AttestationItem, AttestationValidationError, AttesterSlashingOrigin,
         BlobSidecarAction, BlobSidecarOrigin, BlockAction, BranchPoint, ChainLink,
-        DataColumnSidecarAction, Difference, DifferenceAtLocation, DissolvedDifference,
-        LatestMessage, Location, PartialAttestationAction, PartialBlockAction, PayloadAction,
-        Score, SegmentId, UnfinalizedBlock, ValidAttestation,
+        DataColumnSidecarAction, DataColumnSidecarOrigin, Difference, DifferenceAtLocation,
+        DissolvedDifference, LatestMessage, Location, PartialAttestationAction, PartialBlockAction,
+        PayloadAction, Score, SegmentId, UnfinalizedBlock, ValidAttestation,
     },
     segment::{Position, Segment},
     state_cache_processor::StateCacheProcessor,
     store_config::StoreConfig,
     supersets::MultiPhaseAggregateAndProofSets as AggregateAndProofSupersets,
-    validations::validate_merge_block,
-    DataColumnSidecarOrigin,
+    validate_merge_block,
 };
 
 /// [`Store`] from the Fork Choice specification.
@@ -216,6 +215,8 @@ pub struct Store<P: Preset> {
     data_column_cache: DataColumnCache<P>,
     rejected_block_roots: HashSet<H256>,
     finished_initial_forward_sync: bool,
+    sample_columns: HashSet<ColumnIndex>,
+    reconstructing_columns: HashMap<H256, bool>,
 }
 
 impl<P: Preset> Store<P> {
@@ -290,6 +291,8 @@ impl<P: Preset> Store<P> {
             data_column_cache: DataColumnCache::default(),
             rejected_block_roots: HashSet::default(),
             finished_initial_forward_sync,
+            sample_columns: HashSet::default(),
+            reconstructing_columns: HashMap::default(),
         }
     }
 
@@ -1881,10 +1884,20 @@ impl<P: Preset> Store<P> {
     pub fn validate_data_column_sidecar(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        block_seen: bool,
         origin: &DataColumnSidecarOrigin,
         current_slot: Slot,
         mut verifier: impl Verifier + Send,
+        metrics: &Option<Arc<Metrics>>,
     ) -> Result<DataColumnSidecarAction<P>> {
+        if let Some(metrics) = metrics.as_ref() {
+            metrics.data_column_sidecars_submitted_for_processing.inc();
+        }
+
+        let _data_column_sidecar_verification_timer = metrics
+            .as_ref()
+            .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
+
         let block_header = data_column_sidecar.signed_block_header.message;
 
         let mut state = self
@@ -1897,17 +1910,20 @@ impl<P: Preset> Store<P> {
                     .unwrap_or_else(|| self.head().state(self))
             });
 
-        // [REJECT] The sidecar's index is consistent with NUMBER_OF_COLUMNS -- i.e. sidecar.index < NUMBER_OF_COLUMNS.
+        // [REJECT] The sidecar is valid as verified by `verify_data_column_sidecar(sidecar).
         ensure!(
-            data_column_sidecar.index < NumberOfColumns::U64,
-            Error::DataColumnSidecarInvalidIndex {
+            verify_data_column_sidecar(&data_column_sidecar),
+            Error::DataColumnSidecarInvalid {
                 data_column_sidecar
             },
         );
 
         // [REJECT] The sidecar is for the correct subnet -- i.e. compute_subnet_for_data_column_sidecar(sidecar.index) == subnet_id.
         if let Some(subnet_id) = origin.subnet_id() {
-            let expected = misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
+            let expected = misc::compute_subnet_for_data_column_sidecar(
+                &self.chain_config,
+                data_column_sidecar.index,
+            );
 
             ensure!(
                 subnet_id == expected,
@@ -1944,15 +1960,15 @@ impl<P: Preset> Store<P> {
 
         // [REJECT] The sidecar's kzg_commitments field inclusion proof is valid as verified by verify_data_column_sidecar_inclusion_proof(sidecar).
         ensure!(
-            verify_sidecar_inclusion_proof(&data_column_sidecar),
+            verify_sidecar_inclusion_proof(&data_column_sidecar, metrics),
             Error::DataColumnSidecarInvalidInclusionProof {
                 data_column_sidecar
             }
         );
 
         // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
-        verify_kzg_proofs(&data_column_sidecar).map_err(|error| {
-            Error::DataColumnSidecarInvalid {
+        verify_kzg_proofs(&data_column_sidecar, metrics).map_err(|error| {
+            Error::DataColumnSidecarInvalidKzgProofs {
                 data_column_sidecar: data_column_sidecar.clone_arc(),
                 error,
             }
@@ -2015,7 +2031,8 @@ impl<P: Preset> Store<P> {
             block_header.slot,
             block_header.proposer_index,
             data_column_sidecar.index,
-        )) {
+        )) && !block_seen
+        {
             return Ok(DataColumnSidecarAction::Ignore);
         }
 
@@ -2046,6 +2063,10 @@ impl<P: Preset> Store<P> {
                 computed,
             }
         );
+
+        if let Some(metrics) = metrics.as_ref() {
+            metrics.verified_gossip_data_column_sidecar.inc();
+        }
 
         Ok(DataColumnSidecarAction::Accept(data_column_sidecar))
     }
@@ -2107,8 +2128,7 @@ impl<P: Preset> Store<P> {
         self.update_head_segment_id();
 
         self.blob_cache.on_slot(new_tick.slot);
-        // TODO(feature/eip-7594): uncomment this after implementing persistence
-        // self.data_column_cache.on_slot(new_tick.slot);
+        self.data_column_cache.on_slot(new_tick.slot);
 
         let changes = if self.reorganized(old_head_segment_id) {
             ApplyTickChanges::Reorganized {
@@ -3268,13 +3288,20 @@ impl<P: Preset> Store<P> {
             return vec![];
         };
 
-        if body.blob_kzg_commitments().is_empty() {
+        if body.blob_kzg_commitments().is_empty()
+            || !self
+                .chain_config
+                .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(block.slot()))
+        {
             return vec![];
         }
 
         let block_root = block.hash_tree_root();
 
-        (0..NumberOfColumns::U64)
+        // check if some columns that require to sample are missing
+        self.sample_columns
+            .clone()
+            .into_iter()
             .filter(|index| {
                 !self
                     .accepted_data_column_sidecars
@@ -3317,6 +3344,62 @@ impl<P: Preset> Store<P> {
         self.state_cache.clone_arc()
     }
 
+    pub fn has_unpersisted_data_column_sidecars(&self) -> bool {
+        self.data_column_cache
+            .has_unpersisted_data_column_sidecars()
+    }
+
+    pub fn mark_persisted_data_columns(
+        &mut self,
+        persisted_data_column_ids: Vec<DataColumnIdentifier>,
+    ) {
+        self.data_column_cache
+            .mark_persisted_data_columns(persisted_data_column_ids);
+    }
+
+    pub fn unpersisted_data_column_sidecars(
+        &self,
+    ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
+        self.data_column_cache.unpersisted_data_column_sidecars()
+    }
+
+    pub fn store_sample_columns(&mut self, sample_columns: HashSet<ColumnIndex>) {
+        self.sample_columns = sample_columns;
+    }
+
+    pub fn has_sample_columns_stored(&self) -> bool {
+        !self.sample_columns.is_empty()
+    }
+
+    pub fn is_supernode(&self) -> bool {
+        self.sample_columns.len() == NumberOfColumns::USIZE
+    }
+
+    pub fn available_columns_at_block(
+        &self,
+        block: &Arc<SignedBeaconBlock<P>>,
+    ) -> Vec<Arc<DataColumnSidecar<P>>> {
+        let block_root = block.message().hash_tree_root();
+
+        (0..NumberOfColumns::U64)
+            .into_iter()
+            .filter_map(|index| {
+                self.data_column_cache
+                    .get(DataColumnIdentifier { block_root, index })
+            })
+            .collect()
+    }
+
+    pub fn mark_reconstructing_data_columns_for_block(&mut self, block_root: H256) {
+        self.reconstructing_columns
+            .entry(block_root)
+            .and_modify(|entry| *entry = true);
+    }
+
+    pub fn has_reconstructed_data_column_sidecars(&self, block_root: H256) -> bool {
+        self.reconstructing_columns.get(&block_root).is_some()
+    }
+
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {
         let type_name = tynm::type_name::<Self>();
 
@@ -3326,7 +3409,12 @@ impl<P: Preset> Store<P> {
             "blob_store",
             self.blob_cache.size(),
         );
-
+        metrics.set_collection_length(
+            module_path!(),
+            &type_name,
+            "data_column_store",
+            self.data_column_cache.size(),
+        );
         metrics.set_collection_length(
             module_path!(),
             &type_name,

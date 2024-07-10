@@ -16,6 +16,7 @@ bls = { workspace = true }
 builder_api = { workspace = true }
 byteorder = { workspace = true }
 enum-iterator = { workspace = true }
+eip_7594 = { workspace = true }
 eth1_api = { workspace = true }
 eth2_libp2p = { workspace = true }
 features = { workspace = true }
@@ -61,7 +62,6 @@ database = { workspace = true }
 dedicated_executor = { workspace = true }
 deposit_tree = { workspace = true }
 eth1 = { workspace = true }
-eth2_cache_utils = { workspace = true }
 execution_engine = { workspace = true }
 factory = { workspace = true }
 fork_choice_store = { workspace = true }
