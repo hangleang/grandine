@@ -1272,14 +1272,15 @@ dependencies = [
 
 [[package]]
 name = "c-kzg"
-version = "1.0.0"
-source = "git+https://github.com/ethereum/c-kzg-4844?branch=das#7027b082ee6a647f44de61646813aa58e955093e"
+version = "1.0.3"
+source = "git+https://github.com/ethereum/c-kzg-4844?branch=das#9990d88016475fe153952044101fc40eefa5e560"
 dependencies = [
  "blst",
  "cc",
  "glob",
  "hex",
  "libc",
+ "once_cell",
  "serde",
 ]
 
@@ -2335,8 +2336,10 @@ dependencies = [
  "duplicate",
  "hashing",
  "helper_functions",
+ "itertools 0.13.0",
  "kzg",
  "num-traits",
+ "prometheus_metrics",
  "serde",
  "sha2 0.10.8",
  "spec_test_utils",
@@ -2950,7 +2953,6 @@ dependencies = [
  "drain_filter_polyfill",
  "duplicate",
  "eip_7594",
- "eth2_cache_utils",
  "eth2_libp2p",
  "execution_engine",
  "factory",
@@ -3011,7 +3013,6 @@ dependencies = [
  "itertools 0.13.0",
  "kzg_utils",
  "log",
- "primitive-types",
  "prometheus_metrics",
  "serde",
  "ssz",
@@ -3862,10 +3863,10 @@ dependencies = [
  "database",
  "dedicated_executor",
  "deposit_tree",
+ "eip_7594",
  "enum-iterator",
  "eth1",
  "eth1_api",
- "eth2_cache_utils",
  "eth2_libp2p",
  "execution_engine",
  "factory",
@@ -5862,7 +5863,6 @@ dependencies = [
  "conv",
  "dedicated_executor",
  "eth1_api",
- "eth2_cache_utils",
  "eth2_libp2p",
  "features",
  "fork_choice_control",
@@ -5947,7 +5947,9 @@ dependencies = [
  "serde_utils",
  "serde_with",
  "slog",
+ "slog-async",
  "slog-stdlog",
+ "slog-term",
  "ssz",
  "std_ext",
  "strum",
@@ -8980,7 +8982,6 @@ dependencies = [
  "directories",
  "doppelganger_protection",
  "eip_7594",
- "eth1",
  "eth1_api",
  "eth2_libp2p",
  "factory",

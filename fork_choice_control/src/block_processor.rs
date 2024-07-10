@@ -8,7 +8,7 @@ use fork_choice_store::{
     StateCacheProcessor, Store,
 };
 use helper_functions::{
-    predicates,
+    accessors, predicates,
     slot_report::{NullSlotReport, RealSlotReport, SlotReport, SyncAggregateRewards},
     verifier::Verifier,
 };
@@ -19,9 +19,11 @@ use transition_functions::{
     combined,
     unphased::{ProcessSlots, StateRootPolicy},
 };
+use typenum::Unsigned as _;
 use types::{
     combined::{BeaconBlock, BeaconState, BlindedBeaconBlock, SignedBeaconBlock},
     config::Config as ChainConfig,
+    eip7594::NumberOfColumns,
     nonstandard::{BlockRewards, Phase, SlashingKind},
     phase0::primitives::H256,
     preset::Preset,

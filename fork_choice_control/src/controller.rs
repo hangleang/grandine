@@ -10,6 +10,7 @@
 
 use core::{panic::AssertUnwindSafe, sync::atomic::AtomicBool};
 use std::{
+    collections::HashSet,
     sync::{mpsc::Sender, Arc},
     thread::{Builder, JoinHandle},
     time::Instant,
@@ -38,7 +39,7 @@ use types::{
     },
     config::Config as ChainConfig,
     deneb::containers::BlobSidecar,
-    eip7594::DataColumnSidecar,
+    eip7594::{ColumnIndex, DataColumnSidecar},
     nonstandard::ValidationOutcome,
     phase0::primitives::{ExecutionBlockHash, Slot, SubnetId},
     preset::Preset,
@@ -186,6 +187,10 @@ where
 
     pub fn chain_config(&self) -> &Arc<ChainConfig> {
         self.storage().config()
+    }
+
+    pub fn on_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        self.spawn_store_sample_columns(sample_columns)
     }
 
     // This should be called at the start of every tick.
@@ -512,13 +517,13 @@ where
         self.storage.store_back_sync_blob_sidecars(blob_sidecars)
     }
 
-    // TODO(feature/fulu): enable this once `store_back_sync_data_column_sidecars` implemented
-    // pub fn store_back_sync_data_column_sidecars(
-    //     &self,
-    //     data_column_sidecars: impl IntoIterator<Item = Arc<DataColumnSidecar<P>>>,
-    // ) -> Result<()> {
-    //     self.storage.store_back_sync_data_column_sidecars(data_column_sidecars)
-    // }
+    pub fn store_back_sync_data_column_sidecars(
+        &self,
+        data_column_sidecars: impl IntoIterator<Item = Arc<DataColumnSidecar<P>>>,
+    ) -> Result<()> {
+        self.storage
+            .store_back_sync_data_column_sidecars(data_column_sidecars)
+    }
 
     pub fn store_back_sync_blocks(
         &self,
@@ -631,6 +636,15 @@ where
         })
     }
 
+    fn spawn_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        if !self.owned_store_snapshot().has_sample_columns_stored() {
+            MutatorMessage::StoreSampleColumns {
+                sample_columns: HashSet::from_iter(sample_columns),
+            }
+            .send(&self.owned_mutator_tx());
+        }
+    }
+
     pub(crate) fn spawn(&self, task: impl Spawn<P, E, W>) {
         self.thread_pool.spawn(task);
     }
@@ -645,6 +659,10 @@ where
 
     pub fn store_config(&self) -> StoreConfig {
         self.store_snapshot().store_config()
+    }
+
+    pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
+        self.store_snapshot().sampling_columns()
     }
 
     pub(crate) fn store_snapshot(&self) -> Guard<Arc<Store<P>>> {

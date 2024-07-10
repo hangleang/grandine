@@ -216,6 +216,23 @@ impl<P: Preset> From<Arc<BlobSidecar<P>>> for BlobSidecarWithId<P> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct DataColumnSidecarWithId<P: Preset> {
+    pub data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    pub data_column_id: DataColumnIdentifier,
+}
+
+impl<P: Preset> From<Arc<DataColumnSidecar<P>>> for DataColumnSidecarWithId<P> {
+    fn from(data_column_sidecar: Arc<DataColumnSidecar<P>>) -> Self {
+        let data_column_id = data_column_sidecar.as_ref().into();
+
+        Self {
+            data_column_sidecar,
+            data_column_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct BlockRewards {
     pub total: Gwei,
@@ -223,12 +240,6 @@ pub struct BlockRewards {
     pub sync_aggregate: Gwei,
     pub proposer_slashings: Gwei,
     pub attester_slashings: Gwei,
-}
-
-#[derive(Clone, Debug)]
-pub struct DataColumnSidecarWithId<P: Preset> {
-    pub data_column_sidecar: Arc<DataColumnSidecar<P>>,
-    pub data_column_id: DataColumnIdentifier,
 }
 
 #[derive(Clone, Copy)]

@@ -149,6 +149,8 @@ pub struct Config {
     #[serde(with = "serde_utils::string_or_native")]
     pub blob_sidecar_subnet_count: NonZeroU64,
     #[serde(with = "serde_utils::string_or_native")]
+    pub min_epochs_for_data_column_sidecars_requests: u64,
+    #[serde(with = "serde_utils::string_or_native")]
     pub data_column_sidecar_subnet_count: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blob_sidecars_electra: u64,
@@ -166,6 +168,8 @@ pub struct Config {
     pub custody_requirement: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub samples_per_slot: u64,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub number_of_columns: usize,
 
     // Later phases and other unknown variables
     //
@@ -251,9 +255,10 @@ impl Default for Config {
             min_epochs_for_blob_sidecars_requests: 4096,
             min_epochs_for_block_requests: 33024,
             blob_sidecar_subnet_count: nonzero!(6_u64),
-            data_column_sidecar_subnet_count: 64,
             max_request_blob_sidecars_electra: 1152,
             blob_sidecar_subnet_count_electra: nonzero!(9_u64),
+            min_epochs_for_data_column_sidecars_requests: 4096,
+            data_column_sidecar_subnet_count: 128,
 
             // Transition
             terminal_block_hash: ExecutionBlockHash::zero(),
@@ -263,8 +268,9 @@ impl Default for Config {
             )),
 
             // Custody
+            samples_per_slot: 8,
             custody_requirement: 4,
-            samples_per_slot: 16,
+            number_of_columns: 128,
 
             // Later phases and other unknown variables
             unknown: BTreeMap::new(),

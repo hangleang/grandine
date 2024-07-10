@@ -39,6 +39,7 @@ pub enum Feature {
     ServeCostlyEndpoints,
     ServeLeakyEndpoints,
     SubscribeToAllAttestationSubnets,
+    SubscribeToAllDataColumnSubnets,
     SubscribeToAllSyncCommitteeSubnets,
     TrackMetrics,
     // By default we fully validate objects produced by the current instance of the application.
