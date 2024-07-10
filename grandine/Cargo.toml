@@ -77,6 +77,7 @@ test-case = { workspace = true }
 default = ["bls/blst", "kzg_utils/blst"]
 
 logger-always-write-style = []
+logger-parse-env = []
 
 # `preset-any` and `network-any` should not be passed to Cargo.
 # They only exist to avoid duplicating lists of features.

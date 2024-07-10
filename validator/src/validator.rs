@@ -920,32 +920,46 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
         let block = Arc::new(beacon_block);
 
-        if self.chain_config.is_eip7594_fork(epoch) {
-            for data_column_sidecar in eip_7594::get_data_column_sidecars(
-                (*block).clone(),
-                block_blobs.unwrap_or_default().into_iter(),
-            )? {
-                let data_column_sidecar = Arc::new(data_column_sidecar);
+        if let Some(blobs) = block_blobs {
+            if !blobs.is_empty() {
+                if self.chain_config.is_eip7594_fork(epoch) {
+                    let cells_and_kzg_proofs =
+                        eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
 
-                self.controller.on_own_data_column_sidecar(
-                    wait_group.clone(),
-                    data_column_sidecar.clone_arc(),
-                );
+                    for data_column_sidecar in
+                        eip_7594::get_data_column_sidecars(&block, cells_and_kzg_proofs)?
+                    {
+                        let data_column_sidecar = Arc::new(data_column_sidecar);
 
-                ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar).send(&self.p2p_tx);
-            }
-        } else {
-            for blob_sidecar in misc::construct_blob_sidecars(
-                &block,
-                block_blobs.unwrap_or_default().into_iter(),
-                block_proofs.unwrap_or_default().into_iter(),
-            )? {
-                let blob_sidecar = Arc::new(blob_sidecar);
+                        if self
+                            .controller
+                            .sampling_columns()
+                            .into_iter()
+                            .contains(&data_column_sidecar.index)
+                        {
+                            self.controller.on_own_data_column_sidecar(
+                                wait_group.clone(),
+                                data_column_sidecar.clone_arc(),
+                            );
+                        }
 
-                self.controller
-                    .on_own_blob_sidecar(wait_group.clone(), blob_sidecar.clone_arc());
+                        ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar)
+                            .send(&self.p2p_tx);
+                    }
+                } else {
+                    for blob_sidecar in misc::construct_blob_sidecars(
+                        &block,
+                        blobs.clone().into_iter(),
+                        block_proofs.unwrap_or_default().into_iter(),
+                    )? {
+                        let blob_sidecar = Arc::new(blob_sidecar);
 
-                ValidatorToP2p::PublishBlobSidecar(blob_sidecar).send(&self.p2p_tx);
+                        self.controller
+                            .on_own_blob_sidecar(wait_group.clone(), blob_sidecar.clone_arc());
+
+                        ValidatorToP2p::PublishBlobSidecar(blob_sidecar).send(&self.p2p_tx);
+                    }
+                }
             }
         }
 
@@ -1035,7 +1049,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 ..
             } = own_attestation;
 
-            let committee_index = misc::committee_index(attestation);
+            let committee_index = misc::committee_index(&attestation);
 
             debug!(
                 "validator {} of committee {} ({:?}) attesting in slot {}: {:?}",
@@ -1584,6 +1598,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         })
     }
 
+    // TODO: filter out duplicate messages
     async fn own_sync_committee_messages(
         &self,
         slot_head: &SlotHead<P>,
@@ -1617,6 +1632,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             .pipe(group_into_btreemap))
     }
 
+    // TODO: filter out duplicate messages
     async fn own_contributions_and_proofs(
         &self,
         slot_head: &SlotHead<P>,
@@ -1691,7 +1707,12 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
     }
 
     fn own_sync_committee_members(&self) -> impl Iterator<Item = &SyncCommitteeMember> {
-        self.own_sync_committee_members.get().into_iter().flatten()
+        // TODO: filter out duplicate members before setting into `own_sync_committee_members`.
+        self.own_sync_committee_members
+            .get()
+            .into_iter()
+            .flatten()
+            .unique_by(|m| &m.validator_index)
     }
 
     async fn own_subcommittee_aggregators(

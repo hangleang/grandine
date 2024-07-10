@@ -7,7 +7,7 @@ use eth2_libp2p::GossipId;
 use execution_engine::ExecutionEngine;
 use fork_choice_store::{
     AggregateAndProofOrigin, AttestationItem, BlobSidecarAction, BlobSidecarOrigin, ChainLink,
-    StateCacheProcessor, Store,
+    DataColumnSidecarAction, DataColumnSidecarOrigin, StateCacheProcessor, Store,
 };
 use helper_functions::misc;
 use itertools::Itertools as _;
@@ -486,11 +486,19 @@ where
         data_column_ids: impl IntoIterator<Item = DataColumnIdentifier> + Send,
     ) -> Result<Vec<Arc<DataColumnSidecar<P>>>> {
         let snapshot = self.snapshot();
+        let storage = self.storage();
 
-        // TODO(feature/eip7594): data columns from storage
         let data_columns = data_column_ids
             .into_iter()
-            .filter_map(|data_column_id| snapshot.cached_data_column_sidecar_by_id(data_column_id))
+            .map(
+                |data_column_id| match snapshot.cached_data_column_sidecar_by_id(data_column_id) {
+                    Some(data_column_sidecar) => Ok(Some(data_column_sidecar)),
+                    None => storage.data_column_sidecar_by_id(data_column_id),
+                },
+            )
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect_vec();
 
         Ok(data_columns)
@@ -626,6 +634,25 @@ where
             parent_fn,
             state_fn,
         )
+    }
+
+    pub fn validate_data_column_sidecar_with_state(
+        &self,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        block_seen: bool,
+        origin: &DataColumnSidecarOrigin,
+        parent_fn: impl FnOnce() -> Option<(Arc<SignedBeaconBlock<P>>, PayloadStatus)>,
+        state_fn: impl FnOnce() -> Result<Arc<BeaconState<P>>>,
+    ) -> Result<DataColumnSidecarAction<P>> {
+        self.store_snapshot()
+            .validate_data_column_sidecar_with_state(
+                data_column_sidecar,
+                block_seen,
+                origin,
+                None,
+                parent_fn,
+                state_fn,
+            )
     }
 }
 
