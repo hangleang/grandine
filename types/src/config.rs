@@ -136,7 +136,7 @@ pub struct Config {
     pub blob_sidecar_subnet_count: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub data_column_sidecar_subnet_count: u64,
-    
+
     // Transition
     pub terminal_block_hash: ExecutionBlockHash,
     #[serde(with = "serde_utils::string_or_native")]
@@ -688,6 +688,11 @@ impl Config {
         epoch >= self.eip7594_fork_epoch
     }
 
+    #[must_use]
+    pub const fn is_eip7594_enabled(&self) -> bool {
+        self.eip7594_fork_epoch != FAR_FUTURE_EPOCH
+    }
+
     fn fork_slots<P: Preset>(&self) -> impl Iterator<Item = (Phase, Toption<Slot>)> + '_ {
         enum_iterator::all().map(|phase| (phase, self.fork_slot::<P>(phase)))
     }
@@ -703,12 +708,6 @@ impl Config {
         ];
 
         enum_iterator::all().skip(1).zip(fields)
-    }
-
-    pub fn data_columns_per_subnet(&self) -> usize {
-        self.number_of_columns
-            .checked_div(self.data_column_sidecar_subnet_count as usize)
-            .expect("subnet count must be greater than 0")
     }
 }
 

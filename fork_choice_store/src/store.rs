@@ -1,6 +1,4 @@
-use core::{
-    ops::{AddAssign as _, Bound, SubAssign as _},
-};
+use core::ops::{AddAssign as _, Bound, SubAssign as _};
 use std::{
     backtrace::Backtrace,
     collections::binary_heap::{BinaryHeap, PeekMut},
@@ -218,6 +216,7 @@ pub struct Store<P: Preset> {
     data_column_cache: DataColumnCache<P>,
     rejected_block_roots: HashSet<H256>,
     finished_initial_forward_sync: bool,
+    custody_columns: HashSet<ColumnIndex>,
     metrics: Option<Arc<Metrics>>,
 }
 
@@ -290,6 +289,7 @@ impl<P: Preset> Store<P> {
             data_column_cache: DataColumnCache::default(),
             rejected_block_roots: HashSet::default(),
             finished_initial_forward_sync,
+            custody_columns: HashSet::default(),
             metrics,
         }
     }
@@ -1007,19 +1007,10 @@ impl<P: Preset> Store<P> {
                 }
             }
         }
-
-        // > Check the block is valid and compute the post-state
-        combined::custom_state_transition(
-            &self.chain_config,
-            state.make_mut(),
-            &block,
-            ProcessSlots::IfNeeded,
-            state_root_policy,
-            execution_engine,
-            verifier,
-            NullSlotReport,
-        )?;
-
+        
+        // > [Modified in EIP7594] Check if blob data is available
+        //
+        // If not, this block MAY be queued and subsequently considered when blob data becomes available
         if self
             .chain_config
             .is_eip7594_fork(accessors::get_current_epoch(&state))
@@ -1034,6 +1025,18 @@ impl<P: Preset> Store<P> {
                 return Ok(BlockAction::DelayUntilBlobs(block));
             }
         }
+        
+        // > Check the block is valid and compute the post-state
+        combined::custom_state_transition(
+            &self.chain_config,
+            state.make_mut(),
+            &block,
+            ProcessSlots::IfNeeded,
+            state_root_policy,
+            execution_engine,
+            verifier,
+            NullSlotReport,
+        )?;
 
         let attester_slashing_results = block
             .message()
@@ -3216,13 +3219,18 @@ impl<P: Preset> Store<P> {
             return vec![];
         };
 
-        if body.blob_kzg_commitments().is_empty() {
+        if self.custody_columns.is_empty() || body.blob_kzg_commitments().is_empty() {
             return vec![];
         }
 
         let block_root = block.hash_tree_root();
 
-        (0..NumberOfColumns::U64)
+        // get custody column count, or custody columns with column index
+        // then, replace the const number of columns with custody columns
+        // since we don't need to do peer sampling to maintained all of the columns
+        self.custody_columns
+            .clone()
+            .into_iter()
             .filter(|index| {
                 !self
                     .accepted_data_column_sidecars
@@ -3232,6 +3240,17 @@ impl<P: Preset> Store<P> {
                     })
             })
             .collect()
+    }
+
+    pub fn store_custody_columns(
+        &mut self,
+        custody_columns: HashSet<ColumnIndex>
+    ) {
+        self.custody_columns = custody_columns;
+    }
+
+    pub fn has_custody_columns_stored(&self) -> bool {
+        !self.custody_columns.is_empty()
     }
 
     pub fn register_rejected_block(&mut self, block_root: H256) {

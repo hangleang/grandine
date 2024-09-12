@@ -17,12 +17,9 @@ use types::{
         BlobCommitmentsInclusionProof, Cell, ColumnIndex, DataColumnSidecar, MatrixEntry,
         NumberOfColumns, DATA_COLUMN_SIDECAR_SUBNET_COUNT, SAMPLES_PER_SLOT,
     },
-    phase0::{
-        containers::SignedBeaconBlockHeader,
-        primitives::{NodeId, SubnetId},
-    },
+    phase0::primitives::{NodeId, SubnetId},
     preset::Preset,
-    traits::{BeaconBlock as _, PostDenebBeaconBlockBody},
+    traits::{PostDenebBeaconBlockBody, SignedBeaconBlock as _},
 };
 
 use crate::trusted_setup::settings;
@@ -48,6 +45,15 @@ pub enum VerifyKzgProofsError {
         column_length: usize,
         proofs_length: usize,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum ExtendedSampleError {
+    #[error(
+        "Allowed failtures is out of range: {allowed_failures} in 0 -> {}",
+        NumberOfColumns::U64 / 2
+    )]
+    AllowedFailtureOutOfRange { allowed_failures: u64 },
 }
 
 pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> Result<bool> {
@@ -268,31 +274,21 @@ fn try_convert_ckzg_cell_to_cell(cell: &CKzgCell) -> Result<Cell> {
 }
 
 pub fn get_data_column_sidecars<P: Preset>(
-    signed_block: SignedBeaconBlock<P>,
+    signed_block: &SignedBeaconBlock<P>,
     blobs: impl Iterator<Item = Blob<P>>,
 ) -> Result<Vec<DataColumnSidecar<P>>> {
     let mut sidecars: Vec<DataColumnSidecar<P>> = Vec::new();
-    let (beacon_block, signature) = signed_block.split();
-
-    if let Some(post_deneb_beacon_block_body) = beacon_block.body().post_deneb() {
+    if let Some(post_deneb_beacon_block_body) = signed_block.message().body().post_deneb() {
         let kzg_commitments_inclusion_proof =
             kzg_commitment_inclusion_proof(post_deneb_beacon_block_body);
+        let signed_block_header = signed_block.to_header();
 
         let kzg_settings = settings();
-
-        let signed_block_header = SignedBeaconBlockHeader {
-            message: beacon_block.to_header(),
-            signature,
-        };
-
-        let c_kzg_blobs = blobs
-            .map(|blob| CKzgBlob::from_bytes(blob.as_bytes()).map_err(Into::into))
-            .collect::<Result<Vec<CKzgBlob>>>()?;
-
-        let cells_and_proofs = c_kzg_blobs
-            .into_iter()
+        let cells_and_proofs = blobs
             .map(|blob| {
-                CKzgCell::compute_cells_and_kzg_proofs(&blob, &kzg_settings).map_err(Into::into)
+                let c_kzg_blob = CKzgBlob::from_bytes(blob.as_bytes())?;
+                CKzgCell::compute_cells_and_kzg_proofs(&c_kzg_blob, &kzg_settings)
+                    .map_err(Into::into)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -383,12 +379,14 @@ fn kzg_commitment_inclusion_proof<P: Preset>(
  * This helper demonstrates how to calculate the number of columns to query per slot when
  * allowing given number of failures, assuming uniform random selection without replacement.
 */
-pub fn get_extended_sample_count(allowed_failures: u64) -> u64 {
+pub fn get_extended_sample_count(allowed_failures: u64) -> Result<u64> {
     // check that `allowed_failures` within the accepted range [0 -> NUMBER_OF_COLUMNS // 2]
-    assert!((0..(NumberOfColumns::U64 / 2)).contains(&allowed_failures));
-
     // missing chunks for more than a half is the worst case
     let worst_case_missing = NumberOfColumns::U64 / 2 + 1;
+    ensure!(
+        allowed_failures < worst_case_missing,
+        ExtendedSampleError::AllowedFailtureOutOfRange { allowed_failures }
+    );
 
     // modified from [math_lib](https://docs.rs/math_l/latest/src/math_l/math.rs.html#32-38) with compatible types
     let math_comb = |n: u64, k: u64| -> f64 {
@@ -416,18 +414,19 @@ pub fn get_extended_sample_count(allowed_failures: u64) -> u64 {
     // number of unique column IDs
     let mut sample_count = SAMPLES_PER_SLOT;
     while sample_count <= NumberOfColumns::U64 {
-        let prb = hypergeom_cdf(
+        if hypergeom_cdf(
             allowed_failures,
             NumberOfColumns::U64,
             worst_case_missing,
             sample_count,
-        );
-        if prb <= false_positive_threshold {
+        ) <= false_positive_threshold
+        {
             break;
         }
         sample_count += 1;
     }
-    return sample_count;
+
+    Ok(sample_count)
 }
 
 #[cfg(test)]

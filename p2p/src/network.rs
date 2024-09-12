@@ -230,6 +230,10 @@ impl<P: Preset> Network<P> {
                             self.publish_blob_sidecar(blob_sidecar);
                             true
                         },
+                        ApiToP2p::PublishDataColumnSidecars(data_column_sidecars) => {
+                            self.publish_data_column_sidecars(data_column_sidecars);
+                            true
+                        },
                         ApiToP2p::PublishAggregateAndProof(aggregate_and_proof) => {
                             self.publish_aggregate_and_proof(aggregate_and_proof);
                             true
@@ -399,8 +403,8 @@ impl<P: Preset> Network<P> {
                         ValidatorToP2p::PublishBlobSidecar(blob_sidecar) => {
                             self.publish_blob_sidecar(blob_sidecar);
                         }
-                        ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar) => {
-                            self.publish_data_column_sidecar(data_column_sidecar);
+                        ValidatorToP2p::PublishDataColumnSidecars(data_column_sidecars) => {
+                            self.publish_data_column_sidecars(data_column_sidecars);
                         }
                         ValidatorToP2p::PublishSingularAttestation(attestation, subnet_id) => {
                             self.publish_singular_attestation(attestation, subnet_id);
@@ -576,18 +580,14 @@ impl<P: Preset> Network<P> {
     }
 
     #[must_use]
-    pub fn get_custodial_peers(&self, _epoch: Epoch, column_index: ColumnIndex) -> Vec<PeerId> {
+    pub fn get_custodial_peers(&self, column_index: ColumnIndex) -> Vec<PeerId> {
         self.network_globals()
             .custody_peers_for_column(column_index)
     }
 
     #[must_use]
-    pub fn get_random_custodial_peer(
-        &self,
-        epoch: Epoch,
-        column_index: ColumnIndex,
-    ) -> Option<PeerId> {
-        self.get_custodial_peers(epoch, column_index)
+    pub fn get_random_custodial_peer(&self, column_index: ColumnIndex) -> Option<PeerId> {
+        self.get_custodial_peers(column_index)
             .choose(&mut thread_rng())
             .cloned()
     }
@@ -616,21 +616,23 @@ impl<P: Preset> Network<P> {
         ))));
     }
 
-    fn publish_data_column_sidecar(&self, data_column_sidecar: Arc<DataColumnSidecar<P>>) {
-        let subnet_id = misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index);
-        let data_column_identifier: DataColumnIdentifier = data_column_sidecar.as_ref().into();
+    fn publish_data_column_sidecars(&self, data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>) {
+        let messages = data_column_sidecars
+            .into_iter()
+            .map(|data_column_sidecar| {
+                PubsubMessage::DataColumnSidecar(Box::new((
+                    misc::compute_subnet_for_data_column_sidecar(data_column_sidecar.index),
+                    data_column_sidecar,
+                )))
+            })
+            .collect::<Vec<_>>();
 
         self.log(
             Level::Debug,
-            format_args!(
-                "publishing data column sidecar: {data_column_identifier:?}, subnet_id: {subnet_id}"
-            ),
+            format_args!("publishing data column sidecars: {messages:?}"),
         );
 
-        self.publish(PubsubMessage::DataColumnSidecar(Box::new((
-            subnet_id,
-            data_column_sidecar,
-        ))));
+        self.publish_batch(messages);
     }
 
     fn publish_singular_attestation(&self, attestation: Arc<Attestation<P>>, subnet_id: SubnetId) {
@@ -1524,10 +1526,6 @@ impl<P: Preset> Network<P> {
                     ),
                 );
 
-                self.log_with_feature(format_args!(
-                    "received blob from RPC (request_id: {request_id}, peer_id: {peer_id}, slot: {blob_sidecar_slot}, blob_id: {blob_identifier:?})",
-                ));
-
                 if self.register_new_received_blob_sidecar(blob_identifier, blob_sidecar_slot) {
                     let block_seen = self
                         .received_block_roots
@@ -1557,10 +1555,6 @@ impl<P: Preset> Network<P> {
                     ),
                 );
 
-                self.log_with_feature(format_args!(
-                    "received blob from RPC (request_id: {request_id}, peer_id: {peer_id}, slot: {blob_sidecar_slot}, blob_id: {blob_identifier:?})",
-                ));
-
                 if self.register_new_received_blob_sidecar(blob_identifier, blob_sidecar_slot) {
                     let block_seen = self
                         .received_block_roots
@@ -1589,10 +1583,6 @@ impl<P: Preset> Network<P> {
                          (request_id: {request_id}, peer_id: {peer_id}, slot: {block_slot}, block: {block:?})",
                     ),
                 );
-
-                self.log_with_feature(format_args!(
-                    "received beacon block from RPC (request_id: {request_id}, peer_id: {peer_id}, slot: {block_slot}, root: {block_root})",
-                ));
 
                 if self.register_new_received_block(block_root, block_slot) {
                     P2pToSync::RequestedBlock((block, peer_id, request_id))
@@ -1665,10 +1655,6 @@ impl<P: Preset> Network<P> {
                     ),
                 );
 
-                self.log_with_feature(format_args!(
-                    "received data column sidecar from RPC (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, column_id: {data_column_identifier:?})",
-                ));
-
                 if self.register_new_received_data_column_sidecar(
                     data_column_identifier,
                     data_column_sidecar_slot,
@@ -1696,10 +1682,6 @@ impl<P: Preset> Network<P> {
                         (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, data_column: {data_column_sidecar:?})",
                     ),
                 );
-
-                self.log_with_feature(format_args!(
-                    "received data column sidecar from RPC (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, column_id: {data_column_identifier:?})",
-                ));
 
                 if self.register_new_received_data_column_sidecar(
                     data_column_identifier,
@@ -2213,13 +2195,13 @@ impl<P: Preset> Network<P> {
         count: u64,
     ) {
         let epoch = misc::compute_epoch_at_slot::<P>(start_slot);
-        let custody_columns = self.network_globals.custody_columns(epoch);
+        let custody_columns = self.network_globals.custody_columns();
         // Total count of columns in custody
         let custody_columns_count = custody_columns.len();
         if let Some(metrics) = self.metrics.as_ref() {
             metrics.set_custody_columns("by_range", custody_columns_count);
-        }
 
+        // prevent node from sending excessive requests, since custody peers is not available.
         if self.check_good_peers_on_column_subnets(epoch) {
             // TODO: is count capped in eth2_libp2p?
             let request = DataColumnsByRangeRequest {
@@ -2239,19 +2221,25 @@ impl<P: Preset> Network<P> {
             );
 
             self.request(peer_id, request_id, Request::DataColumnsByRange(request));
+        } else {
+            self.log(
+                Level::Debug,
+                format_args!(
+                    "Waiting for peers to be available on custody_columns: {custody_columns:?}"
+                ),
+            );
         }
     }
 
     #[must_use]
     fn map_peer_custody_columns(
         &self,
-        epoch: Epoch,
         custody_columns: &Vec<ColumnIndex>,
     ) -> HashMap<PeerId, Vec<ColumnIndex>> {
         let mut peer_columns_mapping = HashMap::new();
 
         for column_index in custody_columns {
-            let Some(custodial_peer) = self.get_random_custodial_peer(epoch, *column_index) else {
+            let Some(custodial_peer) = self.get_random_custodial_peer(*column_index) else {
                 // this should return no custody column error, rather than warning
                 warn!("No custodial peer for column_index: {column_index}");
                 continue;
@@ -2339,6 +2327,8 @@ impl<P: Preset> Network<P> {
 
             if let Some(topic) = self.subnet_gossip_topic(subnet) {
                 ServiceInboundMessage::Subscribe(topic).send(&self.network_to_service_tx);
+            } else {
+                warn!("Could not subscribe to gossipsub topic on subnet_id: {subnet_id}");
             }
         }
     }
@@ -2361,6 +2351,10 @@ impl<P: Preset> Network<P> {
 
     fn publish(&self, message: PubsubMessage<P>) {
         ServiceInboundMessage::Publish(message).send(&self.network_to_service_tx);
+    }
+
+    fn publish_batch(&self, messages: Vec<PubsubMessage<P>>) {
+        ServiceInboundMessage::PublishBatch(messages).send(&self.network_to_service_tx);
     }
 
     fn request(&self, peer_id: PeerId, request_id: RequestId, request: Request) {
@@ -2546,6 +2540,9 @@ fn run_network_service<P: Preset>(
                         }
                         ServiceInboundMessage::Publish(message) => {
                             service.publish(vec![message]);
+                        }
+                        ServiceInboundMessage::PublishBatch(messages) => {
+                            service.publish(messages);
                         }
                         ServiceInboundMessage::ReportPeer(peer_id, action, source, msg) => {
                             service.report_peer(&peer_id, action, source, msg);
