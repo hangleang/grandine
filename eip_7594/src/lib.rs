@@ -5,6 +5,7 @@ use helper_functions::predicates::is_valid_merkle_branch;
 use itertools::Itertools;
 use kzg as _;
 use num_traits::One as _;
+use prometheus_metrics::Metrics;
 use sha2::{Digest as _, Sha256};
 use ssz::{ByteVector, ContiguousList, ContiguousVector, SszHash, Uint256};
 use thiserror::Error;
@@ -119,6 +120,10 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
 pub fn verify_sidecar_inclusion_proof<P: Preset>(
     data_column_sidecar: &DataColumnSidecar<P>,
 ) -> bool {
+    let _sidecar_inclusion_proof_timer = metrics
+        .as_ref()
+        .map(|metrics| metrics.data_column_sidecar_inclusion_proof_verification.start_timer());
+
     let DataColumnSidecar {
         kzg_commitments,
         signed_block_header,
