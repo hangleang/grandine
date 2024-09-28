@@ -1491,7 +1491,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         let control_flow = self
             .validate_and_store_block(
                 &beacon_block,
-&slot_head.beacon_state,
+                &slot_head.beacon_state,
                 public_key.to_bytes(),
                 slot_head.current_epoch(),
             )
@@ -2274,7 +2274,8 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
     }
 
     fn own_sync_committee_members(&self) -> impl Iterator<Item = &SyncCommitteeMember> {
-        self.own_sync_committee_members.get().into_iter().flatten()
+        // TODO: filter out duplicate members before setting into `own_sync_committee_members`.
+        self.own_sync_committee_members.get().into_iter().flatten().unique_by(|m| &m.validator_index)
     }
 
     async fn own_subcommittee_aggregators(

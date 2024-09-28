@@ -943,6 +943,7 @@ dependencies = [
  "bls",
  "clock",
  "derive_more",
+ "eth2_cache_utils",
  "helper_functions",
  "hex-literal",
  "itertools 0.12.1",

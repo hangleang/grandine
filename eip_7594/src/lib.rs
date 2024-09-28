@@ -99,9 +99,9 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
 
     let kzg_settings = settings();
 
-    let col_indices: Vec<u64> = vec![*index; column.len()];
+    let cell_indices: Vec<u64> = vec![*index; column.len()];
 
-    let column = column
+    let cells = column
         .clone()
         .into_iter()
         .map(|a| CKzgCell::from_bytes(a.as_bytes()).map_err(Into::into))
@@ -119,9 +119,9 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
 
     CKzgProof::verify_cell_kzg_proof_batch(
         commitments.as_slice(),
-        col_indices.as_slice(),
-        column.as_slice(),
-        &kzg_proofs,
+        cell_indices.as_slice(),
+        cells.as_slice(),
+        kzg_proofs.as_slice(),
         &kzg_settings,
     )
     .map_err(Into::into)
@@ -324,15 +324,6 @@ pub fn get_data_column_sidecars<P: Preset>(
                 .map(|row_index| cells_and_proofs[row_index].1[column_index as usize].clone())
                 .collect();
             
-            // let mut cont_cells = Vec::new();
-
-            // for cell in cells {
-            //     let bytes = cell.into_iter();
-            //     let v = ByteVector::from(ContiguousVector::try_from_iter(bytes)?);
-            //     let v = Box::new(v);
-
-            //     cont_cells.push(v);
-            // }
             let cells = column_cells
                 .iter()
                 .map(|cell| try_convert_ckzg_cell_to_cell(cell))

@@ -702,7 +702,11 @@ impl<P: Preset> BlockSyncService<P> {
 
         if !was_forward_synced && is_forward_synced {
             SyncToP2p::SubscribeToCoreTopics.send(&self.sync_to_p2p_tx);
-            SyncToP2p::SubscribeToDataColumnTopics.send(&self.sync_to_p2p_tx);
+
+            let head_slot = self.controller.snapshot().head_slot();
+            if self.controller.chain_config().is_eip7594_fork(misc::compute_epoch_at_slot::<P>(head_slot)) {
+                SyncToP2p::SubscribeToDataColumnTopics.send(&self.sync_to_p2p_tx);
+            }
 
             if self.back_sync.is_some() {
                 SyncToP2p::PruneReceivedBlocks.send(&self.sync_to_p2p_tx);
