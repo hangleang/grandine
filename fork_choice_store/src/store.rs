@@ -1799,7 +1799,11 @@ impl<P: Preset> Store<P> {
         mut verifier: impl Verifier + Send,
         metrics: &Option<Arc<Metrics>>,
     ) -> Result<DataColumnSidecarAction<P>> {
-        let _timer = metrics
+        if let Some(metrics) = metrics.as_ref() {
+            metrics.data_column_sidecars_submitted_for_processing.inc();
+        }
+
+        let _data_column_sidecar_verification_timer = metrics
             .as_ref()
             .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
 
@@ -1860,14 +1864,17 @@ impl<P: Preset> Store<P> {
 
         // [REJECT] The sidecar's kzg_commitments field inclusion proof is valid as verified by verify_data_column_sidecar_inclusion_proof(sidecar).
         ensure!(
-            verify_sidecar_inclusion_proof(&data_column_sidecar),
+            verify_sidecar_inclusion_proof(&data_column_sidecar, metrics),
             Error::DataColumnSidecarInvalidInclusionProof {
                 data_column_sidecar
             }
         );
 
         // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
-        verify_kzg_proofs(&data_column_sidecar).map_err(|error| {
+        verify_kzg_proofs(
+            &data_column_sidecar, 
+            metrics,
+        ).map_err(|error| {
             Error::DataColumnSidecarInvalidKzgProofs {
                 data_column_sidecar: data_column_sidecar.clone_arc(),
                 error,
@@ -1962,6 +1969,10 @@ impl<P: Preset> Store<P> {
                 computed,
             }
         );
+
+        if let Some(metrics) = metrics.as_ref() {
+            metrics.verified_gossip_data_column_sidecar.inc();
+        }
 
         Ok(DataColumnSidecarAction::Accept(data_column_sidecar))
     }
