@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Result};
 use arithmetic::NonZeroExt as _;
 use clock::Tick;
-use eip_7594::{verify_kzg_proofs, verify_sidecar_inclusion_proof};
+use eip_7594::{verify_data_column_sidecar, verify_kzg_proofs, verify_sidecar_inclusion_proof};
 use execution_engine::ExecutionEngine;
 use features::Feature;
 use hash_hasher::HashedMap;
@@ -1004,7 +1004,7 @@ impl<P: Preset> Store<P> {
                 }
             }
         }
-        
+
         // > [Modified in EIP7594] Check if blob data is available
         //
         // If not, this block MAY be queued and subsequently considered when blob data becomes available
@@ -1022,7 +1022,7 @@ impl<P: Preset> Store<P> {
                 return Ok(BlockAction::DelayUntilBlobs(block));
             }
         }
-        
+
         // > Check the block is valid and compute the post-state
         combined::custom_state_transition(
             &self.chain_config,
@@ -1816,10 +1816,10 @@ impl<P: Preset> Store<P> {
                     .unwrap_or_else(|| self.head().state(self))
             });
 
-        // [REJECT] The sidecar's index is consistent with NUMBER_OF_COLUMNS -- i.e. sidecar.index < NUMBER_OF_COLUMNS.
+        // [REJECT] The sidecar is valid as verified by `verify_data_column_sidecar(sidecar).
         ensure!(
-            data_column_sidecar.index < NumberOfColumns::U64,
-            Error::DataColumnSidecarInvalidIndex {
+            verify_data_column_sidecar(&data_column_sidecar),
+            Error::DataColumnSidecarInvalid {
                 data_column_sidecar
             },
         );
@@ -1868,7 +1868,7 @@ impl<P: Preset> Store<P> {
 
         // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
         verify_kzg_proofs(&data_column_sidecar).map_err(|error| {
-            Error::DataColumnSidecarInvalid {
+            Error::DataColumnSidecarInvalidKzgProofs {
                 data_column_sidecar: data_column_sidecar.clone_arc(),
                 error,
             }
@@ -3220,10 +3220,7 @@ impl<P: Preset> Store<P> {
             .collect()
     }
 
-    pub fn store_custody_columns(
-        &mut self,
-        custody_columns: HashSet<ColumnIndex>
-    ) {
+    pub fn store_custody_columns(&mut self, custody_columns: HashSet<ColumnIndex>) {
         self.custody_columns = custody_columns;
     }
 
@@ -3248,14 +3245,21 @@ impl<P: Preset> Store<P> {
     }
 
     pub fn has_unpersisted_data_column_sidecars(&self) -> bool {
-        self.data_column_cache.has_unpersisted_data_column_sidecars()
+        self.data_column_cache
+            .has_unpersisted_data_column_sidecars()
     }
 
-    pub fn mark_persisted_data_columns(&mut self, persisted_data_column_ids: Vec<DataColumnIdentifier>) {
-        self.data_column_cache.mark_persisted_data_columns(persisted_data_column_ids);
+    pub fn mark_persisted_data_columns(
+        &mut self,
+        persisted_data_column_ids: Vec<DataColumnIdentifier>,
+    ) {
+        self.data_column_cache
+            .mark_persisted_data_columns(persisted_data_column_ids);
     }
 
-    pub fn unpersisted_data_column_sidecars(&self) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
+    pub fn unpersisted_data_column_sidecars(
+        &self,
+    ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
         self.data_column_cache.unpersisted_data_column_sidecars()
     }
 
@@ -3263,7 +3267,11 @@ impl<P: Preset> Store<P> {
         let type_name = tynm::type_name::<Self>();
 
         metrics.set_collection_length(&type_name, "blob_store", self.blob_cache.size());
-        metrics.set_collection_length(&type_name, "data_column_store", self.data_column_cache.size());
+        metrics.set_collection_length(
+            &type_name,
+            "data_column_store",
+            self.data_column_cache.size(),
+        );
         metrics.set_collection_length(&type_name, "finalized", self.finalized().len());
         metrics.set_collection_length(&type_name, "unfinalized", self.unfinalized().len());
 

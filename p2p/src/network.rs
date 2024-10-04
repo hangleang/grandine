@@ -2341,10 +2341,22 @@ impl<P: Preset> Network<P> {
     }
 
     fn publish(&self, message: PubsubMessage<P>) {
+        self.log(Level::Info, format_args!("publishing {message}"));
         ServiceInboundMessage::Publish(message).send(&self.network_to_service_tx);
     }
 
     fn publish_batch(&self, messages: Vec<PubsubMessage<P>>) {
+        self.log(
+            Level::Info,
+            format_args!(
+                "publishing [{}]",
+                messages
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        );
         ServiceInboundMessage::PublishBatch(messages).send(&self.network_to_service_tx);
     }
 

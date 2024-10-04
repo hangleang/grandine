@@ -45,6 +45,8 @@ pub enum VerifyKzgProofsError {
         column_length: usize,
         proofs_length: usize,
     },
+    #[error("Sidecar with no commitments considered to be invalid.")]
+    SidecarWithoutCommitments,
 }
 
 #[derive(Debug, Error)]
@@ -67,7 +69,8 @@ pub enum GetDataColumnSidecarsError {
     },
 }
 
-pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> Result<bool> {
+/// Verify if the data column sidecar is valid.
+pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> bool {
     let DataColumnSidecar {
         index,
         column,
@@ -76,28 +79,60 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
         ..
     } = data_column_sidecar;
 
-    ensure!(
-        *index < NumberOfColumns::U64,
-        VerifyKzgProofsError::SidecarIndexOutOfBounds { index: *index }
-    );
+    // The sidecar index must be within the valid range
+    // ensure!(
+    //     *index < NumberOfColumns::U64,
+    //     VerifyKzgProofsError::SidecarIndexOutOfBounds { index: *index }
+    // );
+    if *index >= NumberOfColumns::U64 {
+        return false;
+    }
 
-    ensure!(
-        column.len() == kzg_commitments.len(),
-        VerifyKzgProofsError::SidecarCommitmentsLengthError {
-            column_length: column.len(),
-            commitments_length: kzg_commitments.len(),
-        }
-    );
+    // A sidecar for zero blobs is invalid
+    // ensure!(
+    //     kzg_commitments.len() > 0,
+    //     VerifyKzgProofsError::SidecarWithoutCommitments
+    // );
+    if kzg_commitments.len() == 0 {
+        return false;
+    }
 
-    ensure!(
-        column.len() == kzg_proofs.len(),
-        VerifyKzgProofsError::SidecarProofsLengthError {
-            column_length: column.len(),
-            proofs_length: kzg_proofs.len(),
-        }
-    );
+    // There should be an equal number of cells/commitments
+    // ensure!(
+    //     column.len() == kzg_commitments.len(),
+    //     VerifyKzgProofsError::SidecarCommitmentsLengthError {
+    //         column_length: column.len(),
+    //         commitments_length: kzg_commitments.len(),
+    //     }
+    // );
+    if column.len() != kzg_commitments.len() {
+        return false;
+    }
 
-    let kzg_settings = settings();
+    // There should be an equal number of commitments/proofs
+    // ensure!(
+    //     column.len() == kzg_proofs.len(),
+    //     VerifyKzgProofsError::SidecarProofsLengthError {
+    //         column_length: column.len(),
+    //         proofs_length: kzg_proofs.len(),
+    //     }
+    // );
+    if column.len() != kzg_proofs.len() {
+        return false;
+    }
+
+    true
+}
+
+/// Verify if the KZG proofs are correct.
+pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> Result<bool> {
+    let DataColumnSidecar {
+        index,
+        column,
+        kzg_commitments,
+        kzg_proofs,
+        ..
+    } = data_column_sidecar;
 
     let cell_indices: Vec<u64> = vec![*index; column.len()];
 
@@ -116,6 +151,8 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
         .iter()
         .map(|a| Bytes48::from_bytes(&a.as_bytes()).map_err(Into::into))
         .collect::<Result<Vec<_>>>()?;
+
+    let kzg_settings = settings();
 
     CKzgProof::verify_cell_kzg_proof_batch(
         commitments.as_slice(),
@@ -323,7 +360,7 @@ pub fn get_data_column_sidecars<P: Preset>(
             let column_proofs: Vec<CKzgProof> = (0..blob_count)
                 .map(|row_index| cells_and_proofs[row_index].1[column_index as usize].clone())
                 .collect();
-            
+
             let cells = column_cells
                 .iter()
                 .map(|cell| try_convert_ckzg_cell_to_cell(cell))

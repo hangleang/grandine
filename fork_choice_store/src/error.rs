@@ -80,10 +80,14 @@ pub enum Error<P: Preset> {
     DataColumnSidecarBlockNotADescendantOfFinalized {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
     },
+    #[error("data_column sidecar is invalid: {data_column_sidecar:?}")]
+    DataColumnSidecarInvalid {
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    },
     // TODO(feature/deneb): This is vague.
     //                      The validation that fails with this error actually checks commitments.
-    #[error("data_column sidecar is invalid: {data_column_sidecar:?} error: {error}")]
-    DataColumnSidecarInvalid {
+    #[error("data_column sidecar's kzg proofs is invalid: {data_column_sidecar:?} error: {error}")]
+    DataColumnSidecarInvalidKzgProofs {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
         error: AnyhowError,
     },
