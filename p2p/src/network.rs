@@ -2341,7 +2341,6 @@ impl<P: Preset> Network<P> {
     }
 
     fn publish(&self, message: PubsubMessage<P>) {
-        self.log(Level::Info, format_args!("publishing {message}"));
         ServiceInboundMessage::Publish(message).send(&self.network_to_service_tx);
     }
 
