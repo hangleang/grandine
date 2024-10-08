@@ -40,7 +40,8 @@ impl From<&StatusMessage> for ChainId {
 }
 
 const BATCHES_PER_PEER: usize = 1;
-const EPOCHS_PER_REQUEST: u64 = 2; // max 32
+/// TODO(feature/das): set to only 1 epoch per request because rate limiting by peer
+const EPOCHS_PER_REQUEST: u64 = 1; // max 32
 const GREEDY_MODE_BATCH_MULTIPLIER: usize = 3;
 const GREEDY_MODE_PEER_LIMIT: usize = 2;
 const MAX_SYNC_DISTANCE_IN_SLOTS: u64 = 10000;
@@ -296,12 +297,8 @@ impl SyncManager {
 
         let slot_distance = remote_head_slot.saturating_sub(sync_start_slot);
         let batches_in_front = usize::try_from(slot_distance / slots_per_request + 1)?;
-
         let mut max_slot = local_head_slot;
-        let blob_serve_range_slot = misc::blob_serve_range_slot::<P>(config, current_slot);
-        let data_column_serve_range_slot =
-            misc::data_column_serve_range_slot::<P>(config, current_slot);
-
+        
         let mut sync_batches = vec![];
         for (peer_id, index) in Self::peer_sync_batch_assignments(&peers_to_sync)
             .zip(0..)
@@ -316,6 +313,8 @@ impl SyncManager {
             max_slot = start_slot + count - 1;
 
             if config.is_eip7594_fork(misc::compute_epoch_at_slot::<P>(start_slot)) {
+                let data_column_serve_range_slot =
+                    misc::data_column_serve_range_slot::<P>(config, current_slot);
                 if data_column_serve_range_slot < max_slot {
                     sync_batches.push(SyncBatch {
                         target: SyncTarget::DataColumnSidecar,
@@ -326,6 +325,7 @@ impl SyncManager {
                     });
                 }
             } else {
+                let blob_serve_range_slot = misc::blob_serve_range_slot::<P>(config, current_slot);
                 if blob_serve_range_slot < max_slot {
                     sync_batches.push(SyncBatch {
                         target: SyncTarget::BlobSidecar,

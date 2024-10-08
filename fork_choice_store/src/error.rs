@@ -99,10 +99,6 @@ pub enum Error<P: Preset> {
     DataColumnSidecarInvalidInclusionProof {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
     },
-    #[error("data_column sidecar index is invalid: {data_column_sidecar:?}")]
-    DataColumnSidecarInvalidIndex {
-        data_column_sidecar: Arc<DataColumnSidecar<P>>,
-    },
     #[error(
         "data_column sidecar is not newer than block parent \
          (data_column sidecar: {data_column_sidecar:?}, parent_slot: {parent_slot})"

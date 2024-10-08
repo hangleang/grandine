@@ -99,7 +99,7 @@ pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSid
         return false;
     }
 
-    // There should be an equal number of cells/commitments
+    // The column length must be equal to the number of commitments/proofs
     // ensure!(
     //     column.len() == kzg_commitments.len(),
     //     VerifyKzgProofsError::SidecarCommitmentsLengthError {
@@ -107,11 +107,6 @@ pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSid
     //         commitments_length: kzg_commitments.len(),
     //     }
     // );
-    if column.len() != kzg_commitments.len() {
-        return false;
-    }
-
-    // There should be an equal number of commitments/proofs
     // ensure!(
     //     column.len() == kzg_proofs.len(),
     //     VerifyKzgProofsError::SidecarProofsLengthError {
@@ -119,7 +114,7 @@ pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSid
     //         proofs_length: kzg_proofs.len(),
     //     }
     // );
-    if column.len() != kzg_proofs.len() {
+    if column.len() != kzg_commitments.len() || column.len() != kzg_proofs.len() {
         return false;
     }
 
