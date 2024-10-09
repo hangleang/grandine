@@ -137,8 +137,8 @@ pub enum MutatorMessage<P: Preset, W> {
     Stop {
         save_to_storage: bool,
     },
-    StoreCustodyColumns {
-        custody_columns: HashSet<ColumnIndex>,
+    StoreSampleColumns {
+        sample_columns: HashSet<ColumnIndex>,
     },
 }
 

@@ -272,8 +272,8 @@ where
                 MutatorMessage::Stop { save_to_storage } => {
                     break self.handle_stop(save_to_storage);
                 }
-                MutatorMessage::StoreCustodyColumns { custody_columns } => {
-                    self.handle_store_custody_columns(custody_columns)
+                MutatorMessage::StoreSampleColumns { sample_columns } => {
+                    self.handle_store_sample_columns(sample_columns)
                 }
             }
         }
@@ -1153,7 +1153,7 @@ where
                 if let Some(gossip_id) = origin.gossip_id() {
                     P2pMessage::Accept(gossip_id).send(&self.p2p_tx);
                 }
-                
+
                 self.accept_data_column_sidecar(&wait_group, data_column_sidecar);
             }
             Ok(DataColumnSidecarAction::Ignore) => {
@@ -1462,14 +1462,13 @@ where
         Ok(())
     }
 
-    fn handle_store_custody_columns(&mut self, custody_columns: HashSet<ColumnIndex>) {
+    fn handle_store_sample_columns(&mut self, sample_columns: HashSet<ColumnIndex>) {
         info!(
-            "storing custody columns: [{}] for further data availability check",
-            custody_columns.iter().join(", "),
+            "storing index of column sidecars to sample: [{}] for further data availability check",
+            sample_columns.iter().join(", "),
         );
 
-        self.store_mut()
-            .store_custody_columns(custody_columns.into());
+        self.store_mut().store_sample_columns(sample_columns.into());
     }
 
     #[allow(clippy::cognitive_complexity)]
