@@ -455,6 +455,50 @@ impl<P: Preset, W> Run for PersistDataColumnSidecarsTask<P, W> {
     }
 }
 
+pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
+    pub store_snapshot: Arc<Store<P>>,
+    pub mutator_tx: Sender<MutatorMessage<P, W>>,
+    pub wait_group: W,
+    pub available_data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
+    pub blob_count: usize,
+    pub metrics: Option<Arc<Metrics>>,
+}
+
+impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
+    fn run(self) {
+        let Self {
+            store_snapshot,
+            mutator_tx,
+            wait_group,
+            available_data_column_sidecars,
+            blob_count,
+            metrics,
+        } = self;
+
+        let _timer = metrics.as_ref().map(|metrics| {
+            metrics.columns_reconstruction_time.start_timer()
+        });
+
+        let partial_matrix = available_data_column_sidecars
+            .into_iter()
+            .flat_map(|sidecar| eip_7594::compute_matrix_for_data_column_sidecar(&sidecar))
+            .collect::<Vec<_>>();
+
+        match eip_7594::recover_matrix(partial_matrix, blob_count, &metrics) {
+            Ok(full_matrix) => {
+                MutatorMessage::ReconstructedMissingColumns {
+                    wait_group,
+                    full_matrix,
+                }
+                .send(&mutator_tx);
+            },
+            Err(error) => {
+                warn!("failed to reconstruct missing data column sidecars: {error:?}");
+            }
+        }
+    }
+}
+
 pub struct CheckpointStateTask<P: Preset, W> {
     pub state_cache: Arc<StateCache<P, W>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,

@@ -19,7 +19,7 @@ use tap::Pipe as _;
 use types::{
     combined::{BeaconState, SignedBeaconBlock},
     deneb::containers::BlobIdentifier,
-    eip7594::{ColumnIndex, DataColumnIdentifier},
+    eip7594::{ColumnIndex, DataColumnIdentifier, MatrixEntry},
     phase0::{
         containers::{Attestation, Checkpoint},
         primitives::{
@@ -140,6 +140,10 @@ pub enum MutatorMessage<P: Preset, W> {
     StoreSampleColumns {
         sample_columns: HashSet<ColumnIndex>,
     },
+    ReconstructedMissingColumns {
+        wait_group: W,
+        full_matrix: Vec<MatrixEntry>,
+    }
 }
 
 impl<P: Preset, W> MutatorMessage<P, W> {

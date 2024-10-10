@@ -31,7 +31,7 @@ use transition_functions::{
     combined,
     unphased::{self, ProcessSlots, StateRootPolicy},
 };
-use typenum::Unsigned as _;
+use typenum::Unsigned;
 use types::{
     bellatrix::containers::PowBlock,
     combined::{BeaconState, SignedBeaconBlock},
@@ -217,6 +217,7 @@ pub struct Store<P: Preset> {
     rejected_block_roots: HashSet<H256>,
     finished_initial_forward_sync: bool,
     sample_columns: HashSet<ColumnIndex>,
+    reconstructing_columns: HashMap<H256, bool>,
 }
 
 impl<P: Preset> Store<P> {
@@ -288,6 +289,7 @@ impl<P: Preset> Store<P> {
             rejected_block_roots: HashSet::default(),
             finished_initial_forward_sync,
             sample_columns: HashSet::default(),
+            reconstructing_columns: HashMap::default(),
         }
     }
 
@@ -3226,14 +3228,6 @@ impl<P: Preset> Store<P> {
             .collect()
     }
 
-    pub fn store_sample_columns(&mut self, sample_columns: HashSet<ColumnIndex>) {
-        self.sample_columns = sample_columns;
-    }
-
-    pub fn has_sample_columns_stored(&self) -> bool {
-        !self.sample_columns.is_empty()
-    }
-
     pub fn register_rejected_block(&mut self, block_root: H256) {
         self.rejected_block_roots.insert(block_root);
     }
@@ -3267,6 +3261,45 @@ impl<P: Preset> Store<P> {
         &self,
     ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
         self.data_column_cache.unpersisted_data_column_sidecars()
+    }
+
+    pub fn store_sample_columns(&mut self, sample_columns: HashSet<ColumnIndex>) {
+        self.sample_columns = sample_columns;
+    }
+
+    pub fn has_sample_columns_stored(&self) -> bool {
+        !self.sample_columns.is_empty()
+    }
+
+    pub fn is_supernode(&self) -> bool {
+        self.sample_columns.len() == NumberOfColumns::USIZE
+    }
+
+    pub fn available_columns_at_block(
+        &self,
+        block: &Arc<SignedBeaconBlock<P>>,
+    ) -> Vec<Arc<DataColumnSidecar<P>>> {
+        let block_root = block.message().hash_tree_root();
+
+        (0..NumberOfColumns::U64)
+            .into_iter()
+            .filter_map(|index| {
+                self.data_column_cache.get(DataColumnIdentifier {
+                    block_root,
+                    index 
+                })
+            })
+            .collect()
+    }
+
+    pub fn mark_reconstructing_data_columns_for_block(&mut self, block_root: H256) {
+        self.reconstructing_columns
+            .entry(block_root)
+            .and_modify(|entry| *entry = true);
+    }
+
+    pub fn has_reconstructed_data_column_sidecars(&self, block_root: H256) -> bool {
+        self.reconstructing_columns.get(&block_root).is_some()
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

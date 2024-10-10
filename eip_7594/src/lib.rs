@@ -239,15 +239,37 @@ pub fn get_custody_columns(
     custody_subnet_count: u64,
 ) -> impl Iterator<Item = ColumnIndex> {
     get_custody_subnets(node_id, custody_subnet_count)
-        .flat_map(|subnet_id| get_data_columns_for_subnet(subnet_id))
+        .flat_map(|subnet_id| get_columns_index_for_subnet(subnet_id))
         .sorted()
 }
 
-fn get_data_columns_for_subnet(subnet_id: SubnetId) -> impl Iterator<Item = ColumnIndex> {
+fn get_columns_index_for_subnet(subnet_id: SubnetId) -> impl Iterator<Item = ColumnIndex> {
     let columns_per_subnet = NumberOfColumns::U64 / DATA_COLUMN_SIDECAR_SUBNET_COUNT;
 
     (0..columns_per_subnet)
         .map(move |column_index| (DATA_COLUMN_SIDECAR_SUBNET_COUNT * column_index + subnet_id))
+}
+
+pub fn compute_matrix_for_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> Vec<MatrixEntry> {
+    let DataColumnSidecar {
+        index,
+        column,
+        kzg_proofs,
+        ..
+    } = data_column_sidecar;
+
+    let blob_count = column.len() as u64;
+
+    (0..blob_count)
+        .zip(column)
+        .zip(kzg_proofs)
+        .map(|((row_index, cell), kzg_proof)| MatrixEntry {
+            row_index, 
+            column_index: *index, 
+            cell: cell.clone(), 
+            kzg_proof: kzg_proof.clone(),
+        })
+        .collect()
 }
 
 /**
@@ -286,7 +308,6 @@ pub fn compute_matrix(
  *
  * This helper demonstrates how to apply ``recover_cells_and_kzg_proofs``.
  */
-// TODO: implement reconstructed_columns metric
 pub fn recover_matrix(
     partial_matrix: Vec<MatrixEntry>,
     blob_count: usize,
@@ -295,8 +316,6 @@ pub fn recover_matrix(
     if let Some(metrics) = metrics.as_ref() {
         let _timer = metrics.columns_reconstruction_time.start_timer();
     }
-
-    let kzg_settings = settings();
 
     let mut matrix = vec![];
     for blob_index in 0..blob_count {
@@ -316,8 +335,10 @@ pub fn recover_matrix(
             .map(|c| CKzgCell::from_bytes(c).map_err(Into::into))
             .collect::<Result<Vec<CKzgCell>>>()?;
 
+        let kzg_settings = settings();
         let (recovered_cells, recovered_proofs) =
             CKzgCell::recover_cells_and_kzg_proofs(&cell_indexs, &cells, &kzg_settings)?;
+
         for (cell_index, (cell, proof)) in recovered_cells
             .into_iter()
             .zip(recovered_proofs.into_iter())

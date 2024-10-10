@@ -46,7 +46,7 @@ use typenum::Unsigned as _;
 use types::{
     combined::{BeaconState, ExecutionPayloadParams, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, NumberOfColumns},
+    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, MatrixEntry, NumberOfColumns},
     nonstandard::{RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
@@ -71,7 +71,7 @@ use crate::{
     tasks::{
         AggregateAndProofTask, AttestationTask, BlobSidecarTask, BlockAttestationsTask, BlockTask,
         CheckpointStateTask, DataColumnSidecarTask, PersistBlobSidecarsTask,
-        PersistDataColumnSidecarsTask, PreprocessStateTask,
+        PersistDataColumnSidecarsTask, PreprocessStateTask, ReconstructDataColumnSidecarsTask,
     },
     thread_pool::{Spawn, ThreadPool},
     unbounded_sink::UnboundedSink,
@@ -275,6 +275,10 @@ where
                 MutatorMessage::StoreSampleColumns { sample_columns } => {
                     self.handle_store_sample_columns(sample_columns)
                 }
+                MutatorMessage::ReconstructedMissingColumns { 
+                    wait_group, 
+                    full_matrix,
+                } => self.handle_reconstructed_remaining_columns(full_matrix)
             }
         }
     }
@@ -502,6 +506,23 @@ where
                     if missing_column_indices.len() * 2 < NumberOfColumns::USIZE
                         || !self.store.is_forward_synced()
                     {
+                        // check if it is supernode, and maintaining columns more than half
+                        let available_columns = self.store.available_columns_at_block(&parent.block);
+                        
+                        if let Some(post_deneb_block_body) = parent.block.message().body().post_deneb() {
+                            let blob_count = post_deneb_block_body.blob_kzg_commitments().len();
+                            
+                            if self.store.is_supernode() && available_columns.len() > NumberOfColumns::USIZE / 2 { 
+                                // TODO(feature/das): reconstruct the missing columns here
+                                info!(
+                                    "reconstructing missing columns: [{}] of {} blobs at slot: {slot}", 
+                                    missing_column_indices.iter().join(", "),
+                                    blob_count,
+                                );
+                                self.handle_reconstruct_missing_data_column_sidecars(&wait_group, block_root, available_columns, blob_count);
+                            }
+                        }
+
                         self.retry_block(wait_group, pending_block);
                     } else {
                         info!(
@@ -1210,6 +1231,29 @@ where
         }
     }
 
+    fn handle_reconstruct_missing_data_column_sidecars(
+        &mut self,
+        wait_group: &W,
+        block_root: H256,
+        available_data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
+        blob_count: usize,
+    ) { 
+
+        if !self.store.has_reconstructed_data_column_sidecars(block_root) {
+            self.store_mut()
+                .mark_reconstructing_data_columns_for_block(block_root);
+
+            self.spawn(ReconstructDataColumnSidecarsTask {
+                store_snapshot: self.owned_store(),
+                mutator_tx: self.owned_mutator_tx(),
+                wait_group: wait_group.clone(),
+                available_data_column_sidecars,
+                blob_count,
+                metrics: self.metrics.clone(),
+            });
+        }
+    }
+
     fn handle_checkpoint_state(
         &mut self,
         wait_group: &W,
@@ -1301,6 +1345,18 @@ where
                 metrics: self.metrics.clone(),
             });
         }
+    }
+
+    fn handle_reconstructed_remaining_columns(
+        &mut self,
+        full_matrix: Vec<MatrixEntry>,
+    ) {
+        // the node MUST expose the new column as if it had received it over the network. 
+        // If the node is subscribed to the subnet corresponding to the column, 
+        // it MUST send the reconstructed DataColumnSidecar to its topic mesh neighbors.
+        // If instead the node is not subscribed to the corresponding subnet, 
+        // it SHOULD still expose the availability of the DataColumnSidecar as part of the gossip emission process.
+        // See <https://github.com/ethereum/consensus-specs/blob/dev/specs/_features/eip7594/das-core.md#reconstruction-and-cross-seeding>
     }
 
     fn handle_preprocessed_beacon_state(&mut self, block_root: H256, state: &Arc<BeaconState<P>>) {
