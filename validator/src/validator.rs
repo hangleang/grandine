@@ -1514,13 +1514,17 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
         if let Some(blobs) = block_blobs {
             if blobs.len() > 0 {
-                info!("there are {} blobs in slot: {}", blobs.len(), slot_head.slot());
+                info!(
+                    "there are {} blobs in slot: {}",
+                    blobs.len(),
+                    slot_head.slot()
+                );
 
                 if self.chain_config.is_eip7594_fork(epoch) {
-                    let data_column_sidecars = eip_7594::get_data_column_sidecars(
-                        &block,
-                        blobs.clone().into_iter(),
-                    )?;
+                    let cells_and_kzg_proofs =
+                        eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+                    let data_column_sidecars =
+                        eip_7594::get_data_column_sidecars(&block, cells_and_kzg_proofs)?;
 
                     if data_column_sidecars.len() > 0 {
                         let messages = data_column_sidecars
@@ -2279,7 +2283,11 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
     fn own_sync_committee_members(&self) -> impl Iterator<Item = &SyncCommitteeMember> {
         // TODO: filter out duplicate members before setting into `own_sync_committee_members`.
-        self.own_sync_committee_members.get().into_iter().flatten().unique_by(|m| &m.validator_index)
+        self.own_sync_committee_members
+            .get()
+            .into_iter()
+            .flatten()
+            .unique_by(|m| &m.validator_index)
     }
 
     async fn own_subcommittee_aggregators(

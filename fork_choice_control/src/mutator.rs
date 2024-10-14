@@ -45,8 +45,13 @@ use std_ext::ArcExt as _;
 use typenum::Unsigned as _;
 use types::{
     combined::{BeaconState, ExecutionPayloadParams, SignedBeaconBlock},
-    deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, MatrixEntry, NumberOfColumns},
+    deneb::{
+        containers::{BlobIdentifier, BlobSidecar},
+        primitives::KzgProof,
+    },
+    eip7594::{
+        Cell, ColumnIndex, DataColumnIdentifier, DataColumnSidecar, MatrixEntry, NumberOfColumns,
+    },
     nonstandard::{RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
@@ -275,10 +280,11 @@ where
                 MutatorMessage::StoreSampleColumns { sample_columns } => {
                     self.handle_store_sample_columns(sample_columns)
                 }
-                MutatorMessage::ReconstructedMissingColumns { 
-                    wait_group, 
+                MutatorMessage::ReconstructedMissingColumns {
+                    wait_group,
+                    block,
                     full_matrix,
-                } => self.handle_reconstructed_remaining_columns(full_matrix)
+                } => self.handle_reconstructed_remaining_columns(wait_group, block, full_matrix)?,
             }
         }
     }
@@ -485,7 +491,7 @@ where
                 let block_root = block.message().hash_tree_root();
 
                 let pending_block = PendingBlock {
-                    block,
+                    block: block.clone_arc(),
                     origin,
                     submission_time,
                 };
@@ -506,20 +512,37 @@ where
                     if missing_column_indices.len() * 2 < NumberOfColumns::USIZE
                         || !self.store.is_forward_synced()
                     {
-                        // check if it is supernode, and maintaining columns more than half
-                        let available_columns = self.store.available_columns_at_block(&parent.block);
-                        
-                        if let Some(post_deneb_block_body) = parent.block.message().body().post_deneb() {
+                        let available_columns =
+                            self.store.available_columns_at_block(&parent.block);
+
+                        if let Some(post_deneb_block_body) =
+                            parent.block.message().body().post_deneb()
+                        {
                             let blob_count = post_deneb_block_body.blob_kzg_commitments().len();
-                            
-                            if self.store.is_supernode() && available_columns.len() > NumberOfColumns::USIZE / 2 { 
+
+                            // check if it is supernode, and maintaining columns more than half
+                            if self.store.is_supernode()
+                                && available_columns.len() > NumberOfColumns::USIZE / 2
+                            {
                                 // TODO(feature/das): reconstruct the missing columns here
-                                info!(
-                                    "reconstructing missing columns: [{}] of {} blobs at slot: {slot}", 
-                                    missing_column_indices.iter().join(", "),
-                                    blob_count,
-                                );
-                                self.handle_reconstruct_missing_data_column_sidecars(&wait_group, block_root, available_columns, blob_count);
+                                if !self
+                                    .store
+                                    .has_reconstructed_data_column_sidecars(block_root)
+                                {
+                                    info!(
+                                        "reconstructing missing columns: [{}] of {} blobs at slot: {slot}", 
+                                        missing_column_indices.iter().join(", "),
+                                        blob_count,
+                                    );
+                                    self.handle_reconstruct_missing_data_column_sidecars(
+                                        &wait_group,
+                                        block,
+                                        available_columns,
+                                        blob_count,
+                                    );
+                                } else {
+                                    debug!("reconstructing already in progress, proceed to retry apply the block: {block_root}");
+                                }
                             }
                         }
 
@@ -1234,24 +1257,23 @@ where
     fn handle_reconstruct_missing_data_column_sidecars(
         &mut self,
         wait_group: &W,
-        block_root: H256,
+        block: Arc<SignedBeaconBlock<P>>,
         available_data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
         blob_count: usize,
-    ) { 
+    ) {
+        let block_root = block.message().hash_tree_root();
+        self.store_mut()
+            .mark_reconstructing_data_columns_for_block(block_root);
 
-        if !self.store.has_reconstructed_data_column_sidecars(block_root) {
-            self.store_mut()
-                .mark_reconstructing_data_columns_for_block(block_root);
-
-            self.spawn(ReconstructDataColumnSidecarsTask {
-                store_snapshot: self.owned_store(),
-                mutator_tx: self.owned_mutator_tx(),
-                wait_group: wait_group.clone(),
-                available_data_column_sidecars,
-                blob_count,
-                metrics: self.metrics.clone(),
-            });
-        }
+        self.spawn(ReconstructDataColumnSidecarsTask {
+            store_snapshot: self.owned_store(),
+            mutator_tx: self.owned_mutator_tx(),
+            wait_group: wait_group.clone(),
+            block,
+            available_data_column_sidecars,
+            blob_count,
+            metrics: self.metrics.clone(),
+        });
     }
 
     fn handle_checkpoint_state(
@@ -1349,14 +1371,66 @@ where
 
     fn handle_reconstructed_remaining_columns(
         &mut self,
+        wait_group: W,
+        block: Arc<SignedBeaconBlock<P>>,
         full_matrix: Vec<MatrixEntry>,
-    ) {
-        // the node MUST expose the new column as if it had received it over the network. 
-        // If the node is subscribed to the subnet corresponding to the column, 
+    ) -> Result<()> {
+        // the node MUST expose the new column as if it had received it over the network.
+        // If the node is subscribed to the subnet corresponding to the column,
         // it MUST send the reconstructed DataColumnSidecar to its topic mesh neighbors.
-        // If instead the node is not subscribed to the corresponding subnet, 
+        // If instead the node is not subscribed to the corresponding subnet,
         // it SHOULD still expose the availability of the DataColumnSidecar as part of the gossip emission process.
         // See <https://github.com/ethereum/consensus-specs/blob/dev/specs/_features/eip7594/das-core.md#reconstruction-and-cross-seeding>
+        //
+        // first, convert the matrix into full data column sidecars
+        let mut cells_and_kzg_proofs: Vec<(
+            [Cell; NumberOfColumns::USIZE],
+            [KzgProof; NumberOfColumns::USIZE],
+        )> = vec![];
+        for entry in full_matrix.into_iter() {
+            let MatrixEntry {
+                cell,
+                kzg_proof,
+                column_index,
+                row_index,
+            } = entry;
+            cells_and_kzg_proofs[row_index as usize].0[column_index as usize] = cell;
+            cells_and_kzg_proofs[row_index as usize].1[column_index as usize] = kzg_proof;
+        }
+        let data_column_sidecars =
+            eip_7594::get_data_column_sidecars(&block, cells_and_kzg_proofs)?;
+
+        // then, accept/store those missing data column sidecars
+        let missing_column_indices = self.store.indices_of_missing_data_columns(&block);
+        let columns_to_store = data_column_sidecars
+            .into_iter()
+            .filter_map(|sidecar| {
+                if missing_column_indices.contains(&sidecar.index) {
+                    Some(Arc::new(sidecar))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        info!(
+            "storing reconstructed data column sidecars (indexes: [{}], block: {}, slot: {})",
+            columns_to_store.iter().map(|c| c.index).join(", "),
+            block.message().hash_tree_root(),
+            block.message().slot(),
+        );
+        for data_column_sidecar in columns_to_store.iter() {
+            debug!(
+                "storing reconstructed data column sidecar (index: {}, column: {data_column_sidecar:?}",
+                data_column_sidecar.index,
+            );
+            self.accept_data_column_sidecar(&wait_group, data_column_sidecar.clone_arc());
+        }
+
+        // after that, publish/propagate those columns on the respective subnets
+        P2pMessage::DataColumnsReconstructed(columns_to_store, block.message().slot())
+            .send(&self.p2p_tx);
+        Ok(())
     }
 
     fn handle_preprocessed_beacon_state(&mut self, block_root: H256, state: &Arc<BeaconState<P>>) {

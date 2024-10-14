@@ -999,8 +999,10 @@ pub async fn publish_block<P: Preset, W: Wait>(
         .chain_config()
         .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
     {
+        let cells_and_kzg_proofs =
+            eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars =
-            eip_7594::get_data_column_sidecars(&signed_beacon_block, blobs.into_iter())?;
+            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
 
         publish_signed_block_with_data_column_sidecar(
             Arc::new(signed_beacon_block),
@@ -1058,10 +1060,11 @@ pub async fn publish_blinded_block<P: Preset, W: Wait>(
         .chain_config()
         .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
     {
-        let data_column_sidecars = eip_7594::get_data_column_sidecars(
-            &signed_beacon_block,
+        let cells_and_kzg_proofs = eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(
             blobs.unwrap_or_default().into_iter(),
         )?;
+        let data_column_sidecars =
+            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
 
         publish_signed_block_with_data_column_sidecar(
             signed_beacon_block,
@@ -1101,8 +1104,10 @@ pub async fn publish_block_v2<P: Preset, W: Wait>(
         .chain_config()
         .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
     {
+        let cells_and_kzg_proofs =
+            eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars =
-            eip_7594::get_data_column_sidecars(&signed_beacon_block, blobs.into_iter())?;
+            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
 
         publish_signed_block_v2_with_data_column_sidecar(
             Arc::new(signed_beacon_block),
@@ -2480,8 +2485,9 @@ async fn publish_signed_block_with_data_column_sidecar<P: Preset, W: Wait>(
             let data_column_sidecar = Arc::new(dcs);
             controller.on_api_data_column_sidecar(data_column_sidecar.clone_arc());
             data_column_sidecar
-        }).collect_vec();
-    
+        })
+        .collect_vec();
+
     ApiToP2p::PublishDataColumnSidecars(data_column_sidecars).send(&api_to_p2p_tx);
     ApiToP2p::PublishBeaconBlock(block.clone_arc()).send(&api_to_p2p_tx);
 

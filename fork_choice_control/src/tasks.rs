@@ -459,6 +459,7 @@ pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
     pub wait_group: W,
+    pub block: Arc<SignedBeaconBlock<P>>,
     pub available_data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
     pub blob_count: usize,
     pub metrics: Option<Arc<Metrics>>,
@@ -470,14 +471,15 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
             store_snapshot,
             mutator_tx,
             wait_group,
+            block,
             available_data_column_sidecars,
             blob_count,
             metrics,
         } = self;
 
-        let _timer = metrics.as_ref().map(|metrics| {
-            metrics.columns_reconstruction_time.start_timer()
-        });
+        let _timer = metrics
+            .as_ref()
+            .map(|metrics| metrics.columns_reconstruction_time.start_timer());
 
         let partial_matrix = available_data_column_sidecars
             .into_iter()
@@ -488,10 +490,11 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
             Ok(full_matrix) => {
                 MutatorMessage::ReconstructedMissingColumns {
                     wait_group,
+                    block,
                     full_matrix,
                 }
                 .send(&mutator_tx);
-            },
+            }
             Err(error) => {
                 warn!("failed to reconstruct missing data column sidecars: {error:?}");
             }

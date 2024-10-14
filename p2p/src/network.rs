@@ -31,6 +31,7 @@ use futures::{
     stream::StreamExt as _,
 };
 use helper_functions::misc;
+use itertools::Itertools;
 use log::{debug, error, log, warn, Level};
 use operation_pools::{BlsToExecutionChangePool, Origin, PoolToP2pMessage, SyncCommitteeAggPool};
 use prometheus_client::registry::Registry;
@@ -376,6 +377,16 @@ impl<P: Preset> Network<P> {
                         P2pMessage::ReverifyGossipAttestation(attestation, subnet_id, gossip_id) => {
                             P2pToAttestationVerifier::GossipAttestation(attestation, subnet_id, gossip_id)
                                 .send(&self.channels.p2p_to_attestation_verifier_tx);
+                        }
+                        P2pMessage::DataColumnsReconstructed(data_column_sidecars, slot) => {
+                            self.log(
+                                Level::Info,
+                                format_args!(
+                                    "propagating data column sidecars after reconstructed (indexes: [{}], slot: {slot})",
+                                    data_column_sidecars.iter().map(|c| c.index).join(", "),
+                                )
+                            );
+                            self.publish_data_column_sidecars(data_column_sidecars);
                         }
                     }
                 },
