@@ -19,7 +19,7 @@ use tap::Pipe as _;
 use types::{
     combined::{BeaconState, SignedBeaconBlock},
     deneb::containers::BlobIdentifier,
-    eip7594::{ColumnIndex, DataColumnIdentifier},
+    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, MatrixEntry},
     phase0::{
         containers::{Attestation, Checkpoint},
         primitives::{
@@ -137,8 +137,13 @@ pub enum MutatorMessage<P: Preset, W> {
     Stop {
         save_to_storage: bool,
     },
-    StoreCustodyColumns {
-        custody_columns: HashSet<ColumnIndex>,
+    StoreSampleColumns {
+        sample_columns: HashSet<ColumnIndex>,
+    },
+    ReconstructedMissingColumns {
+        wait_group: W,
+        block: Arc<SignedBeaconBlock<P>>,
+        full_matrix: Vec<MatrixEntry>,
     },
 }
 
@@ -168,6 +173,7 @@ pub enum P2pMessage<P: Preset> {
     FinalizedCheckpoint(Checkpoint),
     HeadState(#[cfg_attr(test, educe(Debug(ignore)))] Arc<BeaconState<P>>),
     ReverifyGossipAttestation(Arc<Attestation<P>>, SubnetId, GossipId),
+    DataColumnsReconstructed(Vec<Arc<DataColumnSidecar<P>>>, Slot),
 }
 
 impl<P: Preset> P2pMessage<P> {

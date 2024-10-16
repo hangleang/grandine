@@ -298,7 +298,7 @@ impl SyncManager {
         let slot_distance = remote_head_slot.saturating_sub(sync_start_slot);
         let batches_in_front = usize::try_from(slot_distance / slots_per_request + 1)?;
         let mut max_slot = local_head_slot;
-        
+
         let mut sync_batches = vec![];
         for (peer_id, index) in Self::peer_sync_batch_assignments(&peers_to_sync)
             .zip(0..)

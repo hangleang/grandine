@@ -1,6 +1,5 @@
 use core::panic::AssertUnwindSafe;
 use std::{
-    collections::HashSet,
     sync::{mpsc::Sender, Arc},
     time::Instant,
 };
@@ -23,7 +22,7 @@ use std_ext::ArcExt as _;
 use types::{
     combined::SignedBeaconBlock,
     deneb::containers::BlobSidecar,
-    eip7594::{ColumnIndex, DataColumnSidecar},
+    eip7594::DataColumnSidecar,
     nonstandard::RelativeEpoch,
     phase0::{
         containers::{Attestation, AttesterSlashing, Checkpoint, SignedAggregateAndProof},
@@ -376,22 +375,6 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
     }
 }
 
-pub struct StoreCustodyColumnsTask<P: Preset, W> {
-    pub mutator_tx: Sender<MutatorMessage<P, W>>,
-    pub custody_columns: HashSet<ColumnIndex>,
-}
-
-impl<P: Preset, W> Run for StoreCustodyColumnsTask<P, W> {
-    fn run(self) {
-        let Self {
-            mutator_tx,
-            custody_columns,
-        } = self;
-
-        MutatorMessage::StoreCustodyColumns { custody_columns }.send(&mutator_tx);
-    }
-}
-
 pub struct PersistBlobSidecarsTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P>>,
     pub storage: Arc<Storage<P>>,
@@ -467,6 +450,53 @@ impl<P: Preset, W> Run for PersistDataColumnSidecarsTask<P, W> {
             }
             Err(error) => {
                 warn!("failed to persist data column sidecars to storage: {error:?}");
+            }
+        }
+    }
+}
+
+pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
+    pub store_snapshot: Arc<Store<P>>,
+    pub mutator_tx: Sender<MutatorMessage<P, W>>,
+    pub wait_group: W,
+    pub block: Arc<SignedBeaconBlock<P>>,
+    pub available_data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
+    pub blob_count: usize,
+    pub metrics: Option<Arc<Metrics>>,
+}
+
+impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
+    fn run(self) {
+        let Self {
+            store_snapshot,
+            mutator_tx,
+            wait_group,
+            block,
+            available_data_column_sidecars,
+            blob_count,
+            metrics,
+        } = self;
+
+        let _timer = metrics
+            .as_ref()
+            .map(|metrics| metrics.columns_reconstruction_time.start_timer());
+
+        let partial_matrix = available_data_column_sidecars
+            .into_iter()
+            .flat_map(|sidecar| eip_7594::compute_matrix_for_data_column_sidecar(&sidecar))
+            .collect::<Vec<_>>();
+
+        match eip_7594::recover_matrix(partial_matrix, blob_count, &metrics) {
+            Ok(full_matrix) => {
+                MutatorMessage::ReconstructedMissingColumns {
+                    wait_group,
+                    block,
+                    full_matrix,
+                }
+                .send(&mutator_tx);
+            }
+            Err(error) => {
+                warn!("failed to reconstruct missing data column sidecars: {error:?}");
             }
         }
     }

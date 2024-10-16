@@ -175,8 +175,8 @@ where
         self.storage().config()
     }
 
-    pub fn on_store_custody_columns(&self, custody_columns: Vec<ColumnIndex>) {
-        self.spawn_store_custody_columns(custody_columns)
+    pub fn on_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        self.spawn_store_sample_columns(sample_columns)
     }
 
     // This should be called at the start of every tick.
@@ -556,10 +556,10 @@ where
         })
     }
 
-    fn spawn_store_custody_columns(&self, custody_columns: Vec<ColumnIndex>) {
-        if !self.owned_store_snapshot().has_custody_columns_stored() {
-            MutatorMessage::StoreCustodyColumns {
-                custody_columns: HashSet::from_iter(custody_columns),
+    fn spawn_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
+        if !self.owned_store_snapshot().has_sample_columns_stored() {
+            MutatorMessage::StoreSampleColumns {
+                sample_columns: HashSet::from_iter(sample_columns),
             }
             .send(&self.owned_mutator_tx());
         }

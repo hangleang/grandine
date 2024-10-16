@@ -31,7 +31,7 @@ use transition_functions::{
     combined,
     unphased::{self, ProcessSlots, StateRootPolicy},
 };
-use typenum::Unsigned as _;
+use typenum::Unsigned;
 use types::{
     bellatrix::containers::PowBlock,
     combined::{BeaconState, SignedBeaconBlock},
@@ -216,7 +216,8 @@ pub struct Store<P: Preset> {
     data_column_cache: DataColumnCache<P>,
     rejected_block_roots: HashSet<H256>,
     finished_initial_forward_sync: bool,
-    custody_columns: HashSet<ColumnIndex>,
+    sample_columns: HashSet<ColumnIndex>,
+    reconstructing_columns: HashMap<H256, bool>,
 }
 
 impl<P: Preset> Store<P> {
@@ -287,7 +288,8 @@ impl<P: Preset> Store<P> {
             data_column_cache: DataColumnCache::default(),
             rejected_block_roots: HashSet::default(),
             finished_initial_forward_sync,
-            custody_columns: HashSet::default(),
+            sample_columns: HashSet::default(),
+            reconstructing_columns: HashMap::default(),
         }
     }
 
@@ -1871,10 +1873,7 @@ impl<P: Preset> Store<P> {
         );
 
         // [REJECT] The sidecar's column data is valid as verified by verify_data_column_sidecar_kzg_proofs(sidecar).
-        verify_kzg_proofs(
-            &data_column_sidecar, 
-            metrics,
-        ).map_err(|error| {
+        verify_kzg_proofs(&data_column_sidecar, metrics).map_err(|error| {
             Error::DataColumnSidecarInvalidKzgProofs {
                 data_column_sidecar: data_column_sidecar.clone_arc(),
                 error,
@@ -3208,16 +3207,14 @@ impl<P: Preset> Store<P> {
             return vec![];
         };
 
-        if self.custody_columns.is_empty() || body.blob_kzg_commitments().is_empty() {
+        if self.sample_columns.is_empty() || body.blob_kzg_commitments().is_empty() {
             return vec![];
         }
 
         let block_root = block.hash_tree_root();
 
-        // get custody column count, or custody columns with column index
-        // then, replace the const number of columns with custody columns
-        // since we don't need to do peer sampling to maintained all of the columns
-        self.custody_columns
+        // check if some columns that require to sample are missing
+        self.sample_columns
             .clone()
             .into_iter()
             .filter(|index| {
@@ -3229,14 +3226,6 @@ impl<P: Preset> Store<P> {
                     })
             })
             .collect()
-    }
-
-    pub fn store_custody_columns(&mut self, custody_columns: HashSet<ColumnIndex>) {
-        self.custody_columns = custody_columns;
-    }
-
-    pub fn has_custody_columns_stored(&self) -> bool {
-        !self.custody_columns.is_empty()
     }
 
     pub fn register_rejected_block(&mut self, block_root: H256) {
@@ -3272,6 +3261,45 @@ impl<P: Preset> Store<P> {
         &self,
     ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
         self.data_column_cache.unpersisted_data_column_sidecars()
+    }
+
+    pub fn store_sample_columns(&mut self, sample_columns: HashSet<ColumnIndex>) {
+        self.sample_columns = sample_columns;
+    }
+
+    pub fn has_sample_columns_stored(&self) -> bool {
+        !self.sample_columns.is_empty()
+    }
+
+    pub fn is_supernode(&self) -> bool {
+        self.sample_columns.len() == NumberOfColumns::USIZE
+    }
+
+    pub fn available_columns_at_block(
+        &self,
+        block: &Arc<SignedBeaconBlock<P>>,
+    ) -> Vec<Arc<DataColumnSidecar<P>>> {
+        let block_root = block.message().hash_tree_root();
+
+        (0..NumberOfColumns::U64)
+            .into_iter()
+            .filter_map(|index| {
+                self.data_column_cache.get(DataColumnIdentifier {
+                    block_root,
+                    index 
+                })
+            })
+            .collect()
+    }
+
+    pub fn mark_reconstructing_data_columns_for_block(&mut self, block_root: H256) {
+        self.reconstructing_columns
+            .entry(block_root)
+            .and_modify(|entry| *entry = true);
+    }
+
+    pub fn has_reconstructed_data_column_sidecars(&self, block_root: H256) -> bool {
+        self.reconstructing_columns.get(&block_root).is_some()
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {
