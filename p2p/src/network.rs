@@ -36,8 +36,6 @@ use log::{debug, error, log, warn, Level};
 use operation_pools::{BlsToExecutionChangePool, Origin, PoolToP2pMessage, SyncCommitteeAggPool};
 use prometheus_client::registry::Registry;
 use prometheus_metrics::Metrics;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
 use slog::{o, Drain as _, Logger};
 use slog_stdlog::StdLog;
 use ssz::ContiguousList;
@@ -458,8 +456,8 @@ impl<P: Preset> Network<P> {
                         SyncToP2p::RequestDataColumnsByRoot(request_id, peer_id, identifiers) => {
                             self.request_data_columns_by_root(request_id, peer_id, identifiers);
                         }
-                        SyncToP2p::RequestDataColumnsByRange(request_id, peer_id, start_slot, count) => {
-                            self.request_data_columns_by_range(request_id, peer_id, start_slot, count);
+                        SyncToP2p::RequestDataColumnsByRange(request_id, peer_id, start_slot, count, peer_custody_columns) => {
+                            self.request_data_columns_by_range(request_id, peer_id, start_slot, count, peer_custody_columns);
                         }
                         SyncToP2p::RequestPeerStatus(request_id, peer_id) => {
                             self.request_peer_status(request_id, peer_id);
@@ -588,19 +586,6 @@ impl<P: Preset> Network<P> {
     #[must_use]
     pub fn node_id(&self) -> NodeId {
         NodeId::from_be_bytes(self.network_globals.local_enr().node_id().raw())
-    }
-
-    #[must_use]
-    pub fn get_custodial_peers(&self, column_index: ColumnIndex) -> Vec<PeerId> {
-        self.network_globals()
-            .custody_peers_for_column(column_index)
-    }
-
-    #[must_use]
-    pub fn get_random_custodial_peer(&self, column_index: ColumnIndex) -> Option<PeerId> {
-        self.get_custodial_peers(column_index)
-            .choose(&mut thread_rng())
-            .cloned()
     }
 
     fn publish_beacon_block(&self, beacon_block: Arc<SignedBeaconBlock<P>>) {
@@ -1659,6 +1644,14 @@ impl<P: Preset> Network<P> {
                 let data_column_identifier = data_column_sidecar.as_ref().into();
 
                 self.log(
+                    Level::Info,
+                    format_args!(
+                        "received DataColumnsByRange response chunk \
+                        (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, data_column: {data_column_identifier:?})",
+                    ),
+                );
+                
+                self.log(
                     Level::Debug,
                     format_args!(
                         "received DataColumnsByRange response chunk \
@@ -1685,6 +1678,14 @@ impl<P: Preset> Network<P> {
             Response::DataColumnsByRoot(Some(data_column_sidecar)) => {
                 let data_column_sidecar_slot = data_column_sidecar.signed_block_header.message.slot;
                 let data_column_identifier = data_column_sidecar.as_ref().into();
+
+                self.log(
+                    Level::Info,
+                    format_args!(
+                        "received DataColumnsByRoot response chunk \
+                        (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, data_column: {data_column_identifier:?})",
+                    ),
+                );
 
                 self.log(
                     Level::Debug,
@@ -2204,9 +2205,9 @@ impl<P: Preset> Network<P> {
         peer_id: PeerId,
         start_slot: Slot,
         count: u64,
+        peer_custody_columns: Vec<ColumnIndex>,
     ) {
         let epoch = misc::compute_epoch_at_slot::<P>(start_slot);
-        let custody_columns = self.network_globals.custody_columns();
 
         // prevent node from sending excessive requests, since custody peers is not available.
         if self.check_good_peers_on_column_subnets(epoch) {
@@ -2215,13 +2216,13 @@ impl<P: Preset> Network<P> {
                 start_slot,
                 count,
                 columns: Arc::new(
-                    ContiguousList::try_from(custody_columns)
+                    ContiguousList::try_from(peer_custody_columns)
                         .expect("fail to parse custody_columns"),
                 ),
             };
 
             self.log(
-                Level::Debug,
+                Level::Info,
                 format_args!(
                     "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, request: {request:?})",
                 ),
@@ -2230,36 +2231,13 @@ impl<P: Preset> Network<P> {
             self.request(peer_id, request_id, Request::DataColumnsByRange(request));
         } else {
             self.log(
-                Level::Debug,
+                Level::Info,
                 format_args!(
-                    "Waiting for peers to be available on custody_columns: {custody_columns:?}"
+                    "Waiting for peers to be available on custody_columns: [{}]",
+                    peer_custody_columns.iter().join(", "),
                 ),
             );
         }
-    }
-
-    #[must_use]
-    fn map_peer_custody_columns(
-        &self,
-        custody_columns: &Vec<ColumnIndex>,
-    ) -> HashMap<PeerId, Vec<ColumnIndex>> {
-        let mut peer_columns_mapping = HashMap::new();
-
-        for column_index in custody_columns {
-            let Some(custodial_peer) = self.get_random_custodial_peer(*column_index) else {
-                // this should return no custody column error, rather than warning
-                warn!("No custodial peer for column_index: {column_index}");
-                continue;
-            };
-
-            let peer_custody_columns = peer_columns_mapping
-                .entry(custodial_peer)
-                .or_insert_with(|| vec![]);
-
-            peer_custody_columns.push(*column_index);
-        }
-
-        peer_columns_mapping
     }
 
     fn request_data_columns_by_root(
