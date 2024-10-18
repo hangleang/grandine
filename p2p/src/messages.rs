@@ -16,7 +16,7 @@ use types::{
     altair::containers::{SignedContributionAndProof, SyncCommitteeMessage},
     combined::{BeaconState, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{DataColumnIdentifier, DataColumnSidecar},
+    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
     nonstandard::Phase,
     phase0::{
         containers::{
@@ -129,7 +129,7 @@ impl SyncToMetrics {
 
 pub enum SyncToP2p {
     PruneReceivedBlocks,
-    RequestDataColumnsByRange(RequestId, PeerId, Slot, u64),
+    RequestDataColumnsByRange(RequestId, PeerId, Slot, u64, Vec<ColumnIndex>),
     RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnIdentifier>),
     RequestBlobsByRange(RequestId, PeerId, Slot, u64),
     RequestBlobsByRoot(RequestId, PeerId, Vec<BlobIdentifier>),
