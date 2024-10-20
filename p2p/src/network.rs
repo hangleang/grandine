@@ -1650,7 +1650,7 @@ impl<P: Preset> Network<P> {
                         (request_id: {request_id}, peer_id: {peer_id}, slot: {data_column_sidecar_slot}, data_column: {data_column_identifier:?})",
                     ),
                 );
-                
+
                 self.log(
                     Level::Debug,
                     format_args!(
@@ -2207,37 +2207,24 @@ impl<P: Preset> Network<P> {
         count: u64,
         peer_custody_columns: Vec<ColumnIndex>,
     ) {
-        let epoch = misc::compute_epoch_at_slot::<P>(start_slot);
+        // TODO: is count capped in eth2_libp2p?
+        let request = DataColumnsByRangeRequest {
+            start_slot,
+            count,
+            columns: Arc::new(
+                ContiguousList::try_from(peer_custody_columns)
+                    .expect("fail to parse custody_columns"),
+            ),
+        };
 
-        // prevent node from sending excessive requests, since custody peers is not available.
-        if self.check_good_peers_on_column_subnets(epoch) {
-            // TODO: is count capped in eth2_libp2p?
-            let request = DataColumnsByRangeRequest {
-                start_slot,
-                count,
-                columns: Arc::new(
-                    ContiguousList::try_from(peer_custody_columns)
-                        .expect("fail to parse custody_columns"),
-                ),
-            };
+        self.log(
+            Level::Debug,
+            format_args!(
+                "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, request: {request:?})",
+            ),
+        );
 
-            self.log(
-                Level::Info,
-                format_args!(
-                    "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, request: {request:?})",
-                ),
-            );
-
-            self.request(peer_id, request_id, Request::DataColumnsByRange(request));
-        } else {
-            self.log(
-                Level::Info,
-                format_args!(
-                    "Waiting for peers to be available on custody_columns: [{}]",
-                    peer_custody_columns.iter().join(", "),
-                ),
-            );
-        }
+        self.request(peer_id, request_id, Request::DataColumnsByRange(request));
     }
 
     fn request_data_columns_by_root(

@@ -520,11 +520,10 @@ where
                         {
                             let blob_count = post_deneb_block_body.blob_kzg_commitments().len();
 
-                            // check if it is supernode, and maintaining columns more than half
+                            // check if it is supernode, and obtaining columns more than half
                             if self.store.is_supernode()
                                 && available_columns.len() > NumberOfColumns::USIZE / 2
                             {
-                                // TODO(feature/das): reconstruct the missing columns here
                                 if !self
                                     .store
                                     .has_reconstructed_data_column_sidecars(block_root)
