@@ -15,7 +15,7 @@ use eth2_libp2p::{
             BlobsByRangeRequest, BlobsByRootRequest, BlocksByRangeRequest, BlocksByRootRequest,
             DataColumnsByRangeRequest, DataColumnsByRootRequest, MaxRequestDataColumnSidecars,
         },
-        GoodbyeReason, StatusMessage,
+        GoodbyeReason, RPCResponseErrorCode, StatusMessage,
     },
     service::Network as Service,
     types::{core_topics_to_subscribe, EnrForkId, ForkContext, GossipEncoding},
@@ -933,7 +933,7 @@ impl<P: Preset> Network<P> {
                     Level::Debug,
                     format_args!("request {id:?} to peer {peer_id} failed: {error}"),
                 );
-                P2pToSync::RequestFailed(peer_id).send(&self.channels.p2p_to_sync_tx);
+                P2pToSync::RequestFailed(peer_id, id, error).send(&self.channels.p2p_to_sync_tx);
             }
             NetworkEvent::RequestReceived {
                 peer_id,
@@ -941,7 +941,10 @@ impl<P: Preset> Network<P> {
                 request,
             } => {
                 if let Err(error) = self.handle_request(peer_id, id, request) {
-                    error!("error while handling request: {error}");
+                    self.log(
+                        Level::Warn,
+                        format_args!("response with error: {error} while handling request: {id:?} from peer: {peer_id}"),
+                    );
                 }
             }
             NetworkEvent::ResponseReceived {
@@ -1156,38 +1159,56 @@ impl<P: Preset> Network<P> {
             .spawn(async move {
                 let blob_sidecars = controller.blob_sidecars_by_range(start_slot..end_slot)?;
 
-                for blob_sidecar in blob_sidecars {
+                if blob_sidecars.is_empty() {
+                    log(
+                        Level::Warn,
+                        connected_peers,
+                        target_peers,
+                        format_args!(
+                            "sending BlobSidecarsByRange response with resource unavailable error \
+                            (peer_request_id: {peer_request_id:?}, peer_id: {peer_id})",
+                        ),
+                    );
+
+                    ServiceInboundMessage::SendErrorResponse(
+                        peer_id,
+                        peer_request_id,
+                        RPCResponseErrorCode::ResourceUnavailable,
+                    ).send(&network_to_service_tx);
+                } else {
+                    for blob_sidecar in blob_sidecars {
+                        log(
+                            Level::Debug,
+                            connected_peers,
+                            target_peers,
+                            format_args!(
+                                "sending BlobSidecarsByRange response chunk \
+                             (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, blob_sidecar: {blob_sidecar:?})",
+                            ),
+                        );
+
+                        ServiceInboundMessage::SendResponse(
+                            peer_id,
+                            peer_request_id,
+                            Box::new(Response::BlobsByRange(Some(blob_sidecar))),
+                        )
+                        .send(&network_to_service_tx);
+                    }
+
                     log(
                         Level::Debug,
                         connected_peers,
                         target_peers,
-                        format_args!(
-                            "sending BlobSidecarsByRange response chunk \
-                         (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, blob_sidecar: {blob_sidecar:?})",
-                        ),
+                        "terminating BlobSidecarsByRange response stream",
                     );
 
                     ServiceInboundMessage::SendResponse(
                         peer_id,
                         peer_request_id,
-                        Box::new(Response::BlobsByRange(Some(blob_sidecar))),
+                        Box::new(Response::BlobsByRange(None)),
                     )
                     .send(&network_to_service_tx);
                 }
-
-                log(
-                    Level::Debug,
-                    connected_peers,
-                    target_peers,
-                    "terminating BlobSidecarsByRange response stream",
-                );
-
-                ServiceInboundMessage::SendResponse(
-                    peer_id,
-                    peer_request_id,
-                    Box::new(Response::BlobsByRange(None)),
-                )
-                .send(&network_to_service_tx);
 
                 Ok::<_, anyhow::Error>(())
             })
@@ -1294,7 +1315,9 @@ impl<P: Preset> Network<P> {
         ));
 
         // > Clients MAY limit the number of data column sidecars in the response.
-        let difference = count.min(MaxRequestDataColumnSidecars::U64);
+        let difference = count
+            .min(MaxRequestDataColumnSidecars::U64)
+            .min(MAX_FOR_DOS_PREVENTION);
 
         let current_slot = self.controller.head_slot();
         let end_slot = start_slot
@@ -1313,41 +1336,59 @@ impl<P: Preset> Network<P> {
             .spawn(async move {
                 let mut data_column_sidecars = controller.data_column_sidecars_by_range(start_slot..end_slot, &columns)?;
 
-                // The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
-                data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
+                if data_column_sidecars.is_empty() {
+                    log(
+                        Level::Warn,
+                        connected_peers,
+                        target_peers,
+                        format_args!(
+                            "sending DataColumnsSidecarsByRange response with resource unavailable error \
+                            (peer_request_id: {peer_request_id:?}, peer_id: {peer_id})",
+                        ),
+                    );
 
-                for data_column_sidecar in data_column_sidecars {
+                    ServiceInboundMessage::SendErrorResponse(
+                        peer_id,
+                        peer_request_id,
+                        RPCResponseErrorCode::ResourceUnavailable,
+                    ).send(&network_to_service_tx);
+                } else {
+                    // The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
+                    data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
+
+                    for data_column_sidecar in data_column_sidecars {
+                        log(
+                            Level::Debug,
+                            connected_peers,
+                            target_peers,
+                            format_args!(
+                                "sending DataColumnsSidecarsByRange response chunk \
+                             (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, data_column_sidecar: {data_column_sidecar:?})",
+                            ),
+                        );
+
+                        ServiceInboundMessage::SendResponse(
+                            peer_id,
+                            peer_request_id,
+                            Box::new(Response::DataColumnsByRange(Some(data_column_sidecar))),
+                        )
+                        .send(&network_to_service_tx);
+                    }
+
                     log(
                         Level::Debug,
                         connected_peers,
                         target_peers,
-                        format_args!(
-                            "sending DataColumnsSidecarsByRange response chunk \
-                         (peer_request_id: {peer_request_id:?}, peer_id: {peer_id}, data_column_sidecar: {data_column_sidecar:?})",
-                        ),
+                        "terminating DataColumnsByRange response stream",
                     );
 
                     ServiceInboundMessage::SendResponse(
                         peer_id,
                         peer_request_id,
-                        Box::new(Response::DataColumnsByRange(Some(data_column_sidecar))),
+                        Box::new(Response::DataColumnsByRange(None)),
                     )
                     .send(&network_to_service_tx);
                 }
-
-                log(
-                    Level::Debug,
-                    connected_peers,
-                    target_peers,
-                    "terminating DataColumnsByRange response stream",
-                );
-
-                ServiceInboundMessage::SendResponse(
-                    peer_id,
-                    peer_request_id,
-                    Box::new(Response::DataColumnsByRange(None)),
-                )
-                .send(&network_to_service_tx);
 
                 Ok::<_, anyhow::Error>(())
             })
@@ -2539,6 +2580,9 @@ fn run_network_service<P: Preset>(
                         }
                         ServiceInboundMessage::SendResponse(peer_id, peer_request_id, response) => {
                             service.send_response(peer_id, peer_request_id, *response);
+                        }
+                        ServiceInboundMessage::SendErrorResponse(peer_id, peer_request_id, error) => {
+                            service.send_error_response(peer_id, peer_request_id, error, error.to_string());
                         }
                         ServiceInboundMessage::Subscribe(gossip_topic) => {
                             service.subscribe(gossip_topic);

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::Result;
 use bls::PublicKeyBytes;
 use eth2_libp2p::{
-    rpc::{GoodbyeReason, StatusMessage},
+    rpc::{GoodbyeReason, RPCError, RPCResponseErrorCode, StatusMessage},
     types::{EnrForkId, GossipKind},
     GossipId, GossipTopic, MessageAcceptance, NetworkEvent, PeerAction, PeerId, PeerRequestId,
     PubsubMessage, ReportSource, Request, Response, Subnet, SubnetDiscovery,
@@ -67,7 +67,7 @@ pub enum P2pToSync<P: Preset> {
     BlocksByRangeRequestFinished(RequestId),
     BlockByRootRequestFinished(H256),
     DataColumnsByRangeRequestFinished(RequestId),
-    RequestFailed(PeerId),
+    RequestFailed(PeerId, RequestId, RPCError),
     DataColumnsByRootChunkReceived(DataColumnIdentifier, PeerId, RequestId),
 }
 
@@ -222,6 +222,7 @@ pub enum ServiceInboundMessage<P: Preset> {
     ReportMessageValidationResult(GossipId, MessageAcceptance),
     SendRequest(PeerId, RequestId, Request),
     SendResponse(PeerId, PeerRequestId, Box<Response<P>>),
+    SendErrorResponse(PeerId, PeerRequestId, RPCResponseErrorCode),
     Subscribe(GossipTopic),
     SubscribeKind(GossipKind),
     SubscribeNewForkTopics(Phase, ForkDigest),

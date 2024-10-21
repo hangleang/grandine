@@ -692,7 +692,8 @@ impl SyncManager {
     }
 
     pub fn get_custodial_peers(&self, column_index: ColumnIndex) -> Vec<PeerId> {
-        self.network_globals().custody_peers_for_column(column_index)
+        self.network_globals()
+            .custody_peers_for_column(column_index)
     }
 
     pub fn get_random_custodial_peer(
@@ -737,7 +738,7 @@ impl SyncManager {
                 // warn!("No custodial peer for column_index: {column_index}");
                 self.log(
                     Level::Warn,
-                    format_args!("No custodial peer for column_index: {column_index}"),
+                    format_args!("No custodial peer for column_index: {column_index} with head slot greater than {min_head_slot}"),
                 );
                 continue;
             };

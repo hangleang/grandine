@@ -4,7 +4,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use database::Database;
 use eth1_api::RealController;
-use eth2_libp2p::{rpc::StatusMessage, NetworkGlobals, PeerId};
+use eth2_libp2p::{
+    rpc::{RPCError, RPCResponseErrorCode, StatusMessage},
+    NetworkGlobals, PeerId,
+};
 use features::Feature;
 use fork_choice_control::SyncMessage;
 use futures::{
@@ -272,11 +275,16 @@ impl<P: Preset> BlockSyncService<P> {
                                 features::log!(DebugP2p, "Batch could not retried while removing peer: {peer_id}");
                             }
                         }
-                        P2pToSync::RequestFailed(peer_id) => {
+                        P2pToSync::RequestFailed(peer_id, request_id, error) => {
                             if !self.is_forward_synced {
-                                let batches_to_retry = self.sync_manager.remove_peer(&peer_id);
-                                if self.retry_sync_batches(batches_to_retry).is_err() {
-                                    features::log!(DebugP2p, "Batch could not retired when request failed");
+                                if let RPCError::ErrorResponse(code, message) = error {
+                                    features::log!(DebugP2p, "peer {peer_id} responded on request: {request_id} with error: ({code}:{message})");
+                                } else {
+                                    let batches_to_retry = self.sync_manager.remove_peer(&peer_id);
+
+                                    if self.retry_sync_batches(batches_to_retry).is_err() {
+                                        features::log!(DebugP2p, "Batch could not retired when request failed");
+                                    }
                                 }
                             }
                         }
