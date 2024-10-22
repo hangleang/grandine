@@ -222,7 +222,7 @@ pub enum ServiceInboundMessage<P: Preset> {
     ReportMessageValidationResult(GossipId, MessageAcceptance),
     SendRequest(PeerId, RequestId, Request),
     SendResponse(PeerId, PeerRequestId, Box<Response<P>>),
-    SendErrorResponse(PeerId, PeerRequestId, RPCResponseErrorCode),
+    SendErrorResponse(PeerId, PeerRequestId, RPCResponseErrorCode, &'static str),
     Subscribe(GossipTopic),
     SubscribeKind(GossipKind),
     SubscribeNewForkTopics(Phase, ForkDigest),

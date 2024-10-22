@@ -1174,6 +1174,7 @@ impl<P: Preset> Network<P> {
                         peer_id,
                         peer_request_id,
                         RPCResponseErrorCode::ResourceUnavailable,
+                        "Requested blob sidecars are not available",
                     ).send(&network_to_service_tx);
                 } else {
                     for blob_sidecar in blob_sidecars {
@@ -1351,6 +1352,7 @@ impl<P: Preset> Network<P> {
                         peer_id,
                         peer_request_id,
                         RPCResponseErrorCode::ResourceUnavailable,
+                        "Requested data column sidecars are not available",
                     ).send(&network_to_service_tx);
                 } else {
                     // The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
@@ -2581,8 +2583,8 @@ fn run_network_service<P: Preset>(
                         ServiceInboundMessage::SendResponse(peer_id, peer_request_id, response) => {
                             service.send_response(peer_id, peer_request_id, *response);
                         }
-                        ServiceInboundMessage::SendErrorResponse(peer_id, peer_request_id, error) => {
-                            service.send_error_response(peer_id, peer_request_id, error, error.to_string());
+                        ServiceInboundMessage::SendErrorResponse(peer_id, peer_request_id, error, reason) => {
+                            service.send_error_response(peer_id, peer_request_id, error, reason.to_string());
                         }
                         ServiceInboundMessage::Subscribe(gossip_topic) => {
                             service.subscribe(gossip_topic);
