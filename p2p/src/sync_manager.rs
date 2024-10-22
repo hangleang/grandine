@@ -175,14 +175,23 @@ impl SyncManager {
         state_slot: Slot,
         low_slot: Slot,
     ) -> Vec<SyncBatch> {
-        let Some(peers_to_sync) = self.find_peers_to_sync() else {
+        // TODO: filter out peers with less head slot
+        let Some(peers_to_sync) = self.find_peers_to_sync().map(|peers| {
+            peers
+                .into_iter()
+                .filter(|peer_id| {
+                    self.peers
+                        .get(&peer_id)
+                        .map_or(false, |peer| peer.head_slot >= state_slot)
+                })
+                .collect_vec()
+        }) else {
             return vec![];
         };
 
         let slots_per_request = P::SlotsPerEpoch::non_zero().get() * EPOCHS_PER_REQUEST;
 
         let mut sync_batches = vec![];
-
         for (peer_id, index) in Self::peer_sync_batch_assignments(&peers_to_sync).zip(0..) {
             let start_slot = state_slot
                 .saturating_sub(slots_per_request * (index + 1))
@@ -228,6 +237,7 @@ impl SyncManager {
         local_head_slot: Slot,
         local_finalized_slot: Slot,
     ) -> Result<Vec<SyncBatch>> {
+        // TODO: filter out peers with less head slot
         let Some(peers_to_sync) = self.find_peers_to_sync() else {
             return Ok(vec![]);
         };
@@ -271,6 +281,16 @@ impl SyncManager {
             }
         };
 
+        // filter out peers with less head slot than `sync_start_slot`
+        let filtered_peers_to_sync = peers_to_sync
+            .into_iter()
+            .filter(|peer_id| {
+                self.peers
+                    .get(&peer_id)
+                    .map_or(false, |peer| peer.head_slot >= sync_start_slot)
+            })
+            .collect_vec();
+
         self.log_with_feature(format_args!(
             "sequential redownloads: {}",
             self.sequential_redownloads
@@ -306,7 +326,7 @@ impl SyncManager {
         let mut max_slot = local_head_slot;
 
         let mut sync_batches = vec![];
-        for (peer_id, index) in Self::peer_sync_batch_assignments(&peers_to_sync)
+        for (peer_id, index) in Self::peer_sync_batch_assignments(&filtered_peers_to_sync)
             .zip(0..)
             .take(batches_in_front)
         {
@@ -691,12 +711,12 @@ impl SyncManager {
             .copied()
     }
 
-    pub fn get_custodial_peers(&self, column_index: ColumnIndex) -> Vec<PeerId> {
+    fn get_custodial_peers(&self, column_index: ColumnIndex) -> Vec<PeerId> {
         self.network_globals()
             .custody_peers_for_column(column_index)
     }
 
-    pub fn get_random_custodial_peer(
+    fn get_random_custodial_peer(
         &self,
         column_index: ColumnIndex,
         prioritized_peer: Option<PeerId>,

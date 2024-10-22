@@ -279,6 +279,7 @@ impl<P: Preset> BlockSyncService<P> {
                             if !self.is_forward_synced {
                                 if let RPCError::ErrorResponse(code, message) = error {
                                     features::log!(DebugP2p, "peer {peer_id} responded on request: {request_id} with error: ({code}:{message})");
+                                    // TODO(feature/das): retry the batch request
                                 } else {
                                     let batches_to_retry = self.sync_manager.remove_peer(&peer_id);
 
@@ -413,8 +414,8 @@ impl<P: Preset> BlockSyncService<P> {
                         self.sync_manager
                             .map_peer_custody_columns(&columns, b.start_slot, None, Some(b.peer_id))
                             .into_iter()
-                            .map(|(peer_id, peer_columns)| SyncBatch {
-                                target: SyncTarget::DataColumnSidecar(peer_columns),
+                            .map(|(peer_id, peer_custody_columns)| SyncBatch {
+                                target: SyncTarget::DataColumnSidecar(peer_custody_columns),
                                 direction: b.direction,
                                 peer_id,
                                 start_slot: b.start_slot,
