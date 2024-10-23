@@ -103,6 +103,13 @@ impl<K: Hash + Eq + Clone> RangeAndRootRequests<K> {
             .map(|(batch, _)| batch)
     }
 
+    pub fn get_request_by_id(&mut self, request_id: RequestId) -> Option<SyncBatch> {
+        self.requests_by_range
+            .cache_get(&request_id)
+            .map(|(batch, _)| batch)
+            .cloned()
+    }
+
     pub fn request_direction(&mut self, request_id: RequestId) -> Option<SyncDirection> {
         self.requests_by_range
             .cache_get(&request_id)

@@ -126,49 +126,46 @@ impl SyncManager {
             .collect_vec()
     }
 
-    //pub fn retry_batch(&mut self, request_id: RequestId, batch: &SyncBatch) -> Option<PeerId> {
-    //    // TODO(feature/das): peer should be not randomized for data columns request
-    //    let peer = self.random_peer();
-    //
-    //    self.log_with_feature(format_args!(
-    //        "retrying batch {batch:?}, new peer: {peer:?}, request_id: {request_id}",
-    //    ));
-    //
-    //    match peer {
-    //        Some(peer_id) => {
-    //            let batch = SyncBatch {
-    //                target: batch.target.clone(),
-    //                direction: batch.direction,
-    //                peer_id,
-    //                start_slot: batch.start_slot,
-    //                count: batch.count,
-    //            };
-    //
-    //            match batch.target {
-    //                SyncTarget::DataColumnSidecar(columns) => {
-    //                    self.add_data_columns_request_by_range(request_id, batch, &columns)
-    //                }
-    //                SyncTarget::BlobSidecar => self.add_blob_request_by_range(request_id, batch),
-    //                SyncTarget::Block => self.add_block_request_by_range(request_id, batch),
-    //            }
-    //        }
-    //        None => {
-    //            if self
-    //                .not_enough_peers_message_shown_at
-    //                .map(|instant| instant.elapsed() > NOT_ENOUGH_PEERS_MESSAGE_COOLDOWN)
-    //                .unwrap_or(true)
-    //            {
-    //                self.log(
-    //                    Level::Warn,
-    //                    format_args!("not enough peers to retry batch: {batch:?}"),
-    //                );
-    //                self.not_enough_peers_message_shown_at = Some(Instant::now());
-    //            }
-    //        }
-    //    }
-    //
-    //    peer
-    //}
+    pub fn get_request_by_id(&mut self, request_id: RequestId) -> Option<SyncBatch> {
+        self.log_with_feature(format_args!("getting request (request_id: {request_id})"));
+
+        self.block_requests
+            .get_request_by_id(request_id)
+            .or(self.blob_requests.get_request_by_id(request_id))
+            .or(self.data_column_requests.get_request_by_id(request_id))
+    }
+
+    pub fn retry_batch(&mut self, request_id: RequestId, batch: SyncBatch) {
+        self.log_with_feature(format_args!(
+            "retrying batch {batch:?}, new peer: {}, request_id: {request_id}",
+            batch.peer_id,
+        ));
+
+        let target = batch.target.clone();
+        match target {
+            SyncTarget::DataColumnSidecar(columns) => {
+                self.add_data_columns_request_by_range(request_id, batch, &columns);
+            }
+            SyncTarget::BlobSidecar => {
+                self.add_blob_request_by_range(request_id, batch);
+            }
+            SyncTarget::Block => {
+                self.add_block_request_by_range(request_id, batch);
+            }
+        }
+
+        // if self
+        //     .not_enough_peers_message_shown_at
+        //     .map(|instant| instant.elapsed() > NOT_ENOUGH_PEERS_MESSAGE_COOLDOWN)
+        //     .unwrap_or(true)
+        // {
+        //     self.log(
+        //         Level::Warn,
+        //         format_args!("not enough peers to request"),
+        //     );
+        //     self.not_enough_peers_message_shown_at = Some(Instant::now());
+        // }
+    }
 
     pub fn build_back_sync_batches<P: Preset>(
         &mut self,
@@ -719,8 +716,8 @@ impl SyncManager {
     fn get_random_custodial_peer(
         &self,
         column_index: ColumnIndex,
-        prioritized_peer: Option<PeerId>,
         min_head_slot: Slot,
+        prioritized_peer: Option<PeerId>,
     ) -> Option<PeerId> {
         let custodial_peers = self
             .get_custodial_peers(column_index)
@@ -752,10 +749,9 @@ impl SyncManager {
 
         for column_index in custody_columns {
             let Some(custodial_peer) =
-                self.get_random_custodial_peer(*column_index, prioritized_peer, min_head_slot)
+                self.get_random_custodial_peer(*column_index, min_head_slot, prioritized_peer)
             else {
-                // this should return no custody column error, rather than warning
-                // warn!("No custodial peer for column_index: {column_index}");
+                // TODO(feature/das): this should return no custody column error, rather than warning
                 self.log(
                     Level::Warn,
                     format_args!("No custodial peer for column_index: {column_index} with head slot greater than {min_head_slot}"),

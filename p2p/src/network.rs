@@ -1225,7 +1225,7 @@ impl<P: Preset> Network<P> {
         request: DataColumnsByRootRequest,
     ) {
         self.log(
-            Level::Debug,
+            Level::Info,
             format_args!(
                 "received DataColumnsByRoot request (peer_id: {peer_id}, request: {request:?})"
             ),
@@ -1294,7 +1294,7 @@ impl<P: Preset> Network<P> {
         request: DataColumnsByRangeRequest,
     ) -> Result<()> {
         self.log(
-            Level::Debug,
+            Level::Info,
             format_args!(
                 "received DataColumnsByRange request (peer_id: {peer_id}, request: {request:?})"
             ),
