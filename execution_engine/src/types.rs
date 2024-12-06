@@ -551,6 +551,7 @@ pub enum PayloadAttributes<P: Preset> {
     Capella(PayloadAttributesV2<P>),
     Deneb(PayloadAttributesV3<P>),
     Electra(PayloadAttributesV3<P>),
+    Fulu(PayloadAttributesV3<P>),
 }
 
 impl<P: Preset> PayloadAttributes<P> {
@@ -561,6 +562,7 @@ impl<P: Preset> PayloadAttributes<P> {
             Self::Capella(_) => Phase::Capella,
             Self::Deneb(_) => Phase::Deneb,
             Self::Electra(_) => Phase::Electra,
+            Self::Fulu(_) => Phase::Fulu,
         }
     }
 }
@@ -665,6 +667,7 @@ pub enum PayloadId {
     Capella(H64),
     Deneb(H64),
     Electra(H64),
+    Fulu(H64),
 }
 
 #[derive(Deserialize)]

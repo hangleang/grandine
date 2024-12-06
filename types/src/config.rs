@@ -74,6 +74,9 @@ pub struct Config {
     pub electra_fork_version: Version,
     #[serde(with = "serde_utils::string_or_native")]
     pub eip7594_fork_epoch: Epoch,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub fulu_fork_epoch: Epoch,
+    pub fulu_fork_version: Version,
 
     // Time parameters
     #[serde(with = "serde_utils::string_or_native")]
@@ -135,6 +138,8 @@ pub struct Config {
     #[serde(with = "serde_utils::string_or_native")]
     pub max_blobs_per_block_electra: usize,
     #[serde(with = "serde_utils::string_or_native")]
+    pub max_blobs_per_block_fulu: usize,
+    #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blocks: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blocks_deneb: u64,
@@ -156,6 +161,8 @@ pub struct Config {
     pub max_request_blob_sidecars_electra: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub blob_sidecar_subnet_count_electra: NonZeroU64,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub max_request_blob_sidecars_fulu: u64,
 
     // Transition
     pub terminal_block_hash: ExecutionBlockHash,
@@ -167,9 +174,11 @@ pub struct Config {
     #[serde(with = "serde_utils::string_or_native")]
     pub custody_requirement: u64,
     #[serde(with = "serde_utils::string_or_native")]
-    pub samples_per_slot: u64,
+    pub number_of_columns: u64,
     #[serde(with = "serde_utils::string_or_native")]
-    pub number_of_columns: usize,
+    pub number_of_custody_groups: u64,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub samples_per_slot: u64,
 
     // Later phases and other unknown variables
     //
@@ -212,6 +221,8 @@ impl Default for Config {
             electra_fork_epoch: FAR_FUTURE_EPOCH,
             electra_fork_version: H32(hex!("05000000")),
             eip7594_fork_epoch: FAR_FUTURE_EPOCH,
+            fulu_fork_epoch: FAR_FUTURE_EPOCH,
+            fulu_fork_version: H32(hex!("06000000")),
 
             // Time parameters
             eth1_follow_distance: 2048,
@@ -248,6 +259,7 @@ impl Default for Config {
             ttfb_timeout: 5,
             max_blobs_per_block: 6,
             max_blobs_per_block_electra: 9,
+            max_blobs_per_block_fulu: 12,
             max_request_blocks: 1024,
             max_request_blocks_deneb: 128,
             max_request_blob_sidecars: 768,
@@ -255,10 +267,11 @@ impl Default for Config {
             min_epochs_for_blob_sidecars_requests: 4096,
             min_epochs_for_block_requests: 33024,
             blob_sidecar_subnet_count: nonzero!(6_u64),
-            max_request_blob_sidecars_electra: 1152,
-            blob_sidecar_subnet_count_electra: nonzero!(9_u64),
             min_epochs_for_data_column_sidecars_requests: 4096,
             data_column_sidecar_subnet_count: 128,
+            max_request_blob_sidecars_electra: 1152,
+            blob_sidecar_subnet_count_electra: nonzero!(9_u64),
+            max_request_blob_sidecars_fulu: 1536,
 
             // Transition
             terminal_block_hash: ExecutionBlockHash::zero(),
@@ -268,9 +281,10 @@ impl Default for Config {
             )),
 
             // Custody
-            samples_per_slot: 8,
             custody_requirement: 4,
             number_of_columns: 128,
+            number_of_custody_groups: 128,
+            samples_per_slot: 8,
 
             // Later phases and other unknown variables
             unknown: BTreeMap::new(),
@@ -332,6 +346,7 @@ impl Config {
             capella_fork_version: H32(hex!("03000001")),
             deneb_fork_version: H32(hex!("04000001")),
             electra_fork_version: H32(hex!("05000001")),
+            fulu_fork_version: H32(hex!("06000001")),
 
             // Time parameters
             eth1_follow_distance: 16,
@@ -732,6 +747,7 @@ impl Config {
             Phase::Capella => self.capella_fork_version,
             Phase::Deneb => self.deneb_fork_version,
             Phase::Electra => self.electra_fork_version,
+            Phase::Fulu => self.fulu_fork_version,
         }
     }
 
@@ -745,6 +761,7 @@ impl Config {
             Phase::Capella => self.capella_fork_epoch,
             Phase::Deneb => self.deneb_fork_epoch,
             Phase::Electra => self.electra_fork_epoch,
+            Phase::Fulu => self.fulu_fork_epoch,
         }
     }
 
@@ -800,7 +817,7 @@ impl Config {
             Phase::Phase0 | Phase::Altair | Phase::Bellatrix | Phase::Capella => {
                 self.max_request_blocks
             }
-            Phase::Deneb | Phase::Electra => self.max_request_blocks_deneb,
+            Phase::Deneb | Phase::Electra | Phase::Fulu => self.max_request_blocks_deneb,
         }
     }
 
@@ -810,7 +827,7 @@ impl Config {
             Phase::Phase0 | Phase::Altair | Phase::Bellatrix | Phase::Capella | Phase::Deneb => {
                 self.blob_sidecar_subnet_count
             }
-            Phase::Electra => self.blob_sidecar_subnet_count_electra,
+            Phase::Electra | Phase::Fulu => self.blob_sidecar_subnet_count_electra,
         }
     }
 
@@ -820,7 +837,7 @@ impl Config {
             Phase::Phase0 | Phase::Altair | Phase::Bellatrix | Phase::Capella | Phase::Deneb => {
                 self.max_request_blob_sidecars
             }
-            Phase::Electra => self.max_request_blob_sidecars_electra,
+            Phase::Electra | Phase::Fulu => self.max_request_blob_sidecars_electra,
         }
     }
 
@@ -837,6 +854,7 @@ impl Config {
             self.capella_fork_epoch,
             self.deneb_fork_epoch,
             self.electra_fork_epoch,
+            self.fulu_fork_epoch,
         ];
 
         enum_iterator::all().skip(1).zip(fields)
@@ -851,6 +869,7 @@ impl Config {
             &mut self.capella_fork_epoch,
             &mut self.deneb_fork_epoch,
             &mut self.electra_fork_epoch,
+            &mut self.fulu_fork_epoch,
         ];
 
         enum_iterator::all().skip(1).zip(fields)

@@ -19,7 +19,7 @@ use types::{
     deneb::primitives::{Blob, KzgProof},
     eip7594::{
         BlobCommitmentsInclusionProof, Cell, ColumnIndex, CustodyIndex, DataColumnSidecar,
-        MatrixEntry, NumberOfColumns, NUMBER_OF_CUSTODY_GROUPS,
+        MatrixEntry, NumberOfColumns,
     },
     phase0::primitives::{NodeId, SubnetId},
     preset::Preset,
@@ -535,8 +535,12 @@ pub fn get_extended_sample_count(allowed_failures: u64, config: &Config) -> Resu
 }
 
 #[must_use]
-pub fn get_custody_groups(node_id: NodeId, custody_group_count: u64) -> Vec<CustodyIndex> {
-    assert!(custody_group_count <= NUMBER_OF_CUSTODY_GROUPS);
+pub fn get_custody_groups(
+    node_id: NodeId,
+    custody_group_count: u64,
+    config: &Config,
+) -> Vec<CustodyIndex> {
+    assert!(custody_group_count <= config.number_of_custody_groups);
 
     let mut custody_groups = vec![];
     let mut current_id = node_id;
@@ -555,7 +559,7 @@ pub fn get_custody_groups(node_id: NodeId, custody_group_count: u64) -> Vec<Cust
         ];
 
         let output_prefix_u64 = u64::from_le_bytes(output_prefix);
-        let custody_group = output_prefix_u64 % NUMBER_OF_CUSTODY_GROUPS;
+        let custody_group = output_prefix_u64 % config.number_of_custody_groups;
 
         if !custody_groups.contains(&custody_group) {
             custody_groups.push(custody_group);
@@ -584,6 +588,7 @@ mod test {
     use types::{
         eip7594::CustodyIndex,
         electra::containers::BeaconBlockBody as ElectraBeaconBlockBody,
+        nonstandard::Phase,
         phase0::primitives::NodeId,
         preset::{Mainnet, Minimal, Preset},
     };
@@ -618,7 +623,11 @@ mod test {
             result,
         } = case.yaml::<Meta>("meta");
 
-        assert_eq!(get_custody_groups(node_id, custody_group_count), result);
+        let config = P::default_config().start_and_stay_in(Phase::Fulu);
+        assert_eq!(
+            get_custody_groups(node_id, custody_group_count, &config),
+            result
+        );
     }
 
     #[derive(Deserialize)]

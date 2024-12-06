@@ -375,6 +375,7 @@ mod spec_tests {
         capella::containers::BeaconBlockBody as CapellaBeaconBlockBody,
         deneb::containers::BeaconBlockBody as DenebBeaconBlockBody,
         electra::containers::BeaconBlockBody as ElectraBeaconBlockBody,
+        fulu::containers::BeaconBlockBody as FuluBeaconBlockBody,
         nonstandard::Phase,
         phase0::containers::SignedBeaconBlockHeader,
         preset::{Mainnet, Minimal},
@@ -419,6 +420,8 @@ mod spec_tests {
         ["consensus-spec-tests/tests/minimal/deneb/light_client/single_merkle_proof/BeaconBlockBody/*/"]   [deneb_minimal_beacon_block_body]   [DenebBeaconBlockBody<Minimal>];
         ["consensus-spec-tests/tests/mainnet/electra/light_client/single_merkle_proof/BeaconBlockBody/*/"] [electra_mainnet_beacon_block_body] [ElectraBeaconBlockBody<Mainnet>];
         ["consensus-spec-tests/tests/minimal/electra/light_client/single_merkle_proof/BeaconBlockBody/*/"] [electra_minimal_beacon_block_body] [ElectraBeaconBlockBody<Minimal>];
+        ["consensus-spec-tests/tests/mainnet/fulu/light_client/single_merkle_proof/BeaconBlockBody/*/"]    [fulu_mainnet_beacon_block_body]    [FuluBeaconBlockBody<Mainnet>];
+        ["consensus-spec-tests/tests/minimal/fulu/light_client/single_merkle_proof/BeaconBlockBody/*/"]    [fulu_minimal_beacon_block_body]    [FuluBeaconBlockBody<Minimal>];
     )]
     #[test_resources(glob)]
     fn function_name(case: Case) {
