@@ -20,8 +20,8 @@ use ssz::{
 use strum::{Display, EnumString};
 use typenum::{
     IsGreaterOrEqual, NonZero, Prod, Quot, Sub1, True, Unsigned, B1, U1, U10, U1048576,
-    U1073741824, U1099511627776, U128, U134217728, U16, U16777216, U17, U2, U2048, U256, U262144,
-    U32, U4, U4096, U512, U6, U64, U65536, U8, U8192, U9,
+    U1073741824, U1099511627776, U12, U128, U134217728, U16, U16777216, U17, U2, U2048, U256,
+    U262144, U32, U4, U4096, U512, U6, U64, U65536, U8, U8192, U9,
 };
 
 use crate::{
@@ -173,6 +173,14 @@ pub trait Preset: Copy + Eq + Ord + Hash + Default + Debug + Send + Sync + 'stat
         + Send
         + Sync;
 
+    // Fulu
+    type MaxBlobsPerBlockFulu: MerkleElements<Blob<Self>> + Eq + Debug + Send + Sync;
+    type KzgCommitmentsInclusionProofDepth: ContiguousVectorElements<H256>
+        + MerkleElements<H256>
+        + ArrayLength<H256, ArrayType: Copy>
+        + Debug
+        + Eq;
+
     // Derived type-level variables
     type MaxAggregatorsPerSlot: MerkleElements<ValidatorIndex>
         + MerkleBits
@@ -295,6 +303,10 @@ impl Preset for Mainnet {
     type PendingConsolidationsLimit = U262144;
     type PendingPartialWithdrawalsLimit = U134217728;
 
+    // Fulu
+    type MaxBlobsPerBlockFulu = U12;
+    type KzgCommitmentsInclusionProofDepth = U4;
+
     // Derived type-level variables
     type MaxAggregatorsPerSlot = Prod<Self::MaxValidatorsPerCommittee, Self::MaxCommitteesPerSlot>;
 
@@ -359,6 +371,10 @@ impl Preset for Minimal {
         type MaxBlobsPerBlockElectra;
         type MaxConsolidationRequestsPerPayload;
         type PendingDepositsLimit;
+
+        // Fulu
+        type MaxBlobsPerBlockFulu;
+        type KzgCommitmentsInclusionProofDepth;
     }
 
     // Phase 0
@@ -463,6 +479,10 @@ impl Preset for Medalla {
         type PendingConsolidationsLimit;
         type PendingPartialWithdrawalsLimit;
 
+        // Fulu
+        type MaxBlobsPerBlockFulu;
+        type KzgCommitmentsInclusionProofDepth;
+
         // Derived type-level variables
         type MaxAggregatorsPerSlot;
     }
@@ -556,6 +576,15 @@ impl PresetName {
             Self::Mainnet => ElectraPreset::new::<Mainnet>(),
             Self::Minimal => ElectraPreset::new::<Minimal>(),
             Self::Medalla => ElectraPreset::new::<Medalla>(),
+        }
+    }
+
+    #[must_use]
+    pub const fn fulu_preset(self) -> FuluPreset {
+        match self {
+            Self::Mainnet => FuluPreset::new::<Mainnet>(),
+            Self::Minimal => FuluPreset::new::<Minimal>(),
+            Self::Medalla => FuluPreset::new::<Medalla>(),
         }
     }
 
@@ -911,6 +940,25 @@ impl ElectraPreset {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "SCREAMING_SNAKE_CASE")]
+pub struct FuluPreset {
+    #[serde(with = "serde_utils::string_or_native")]
+    max_blobs_per_block_fulu: u64,
+    #[serde(with = "serde_utils::string_or_native")]
+    kzg_commitments_inclusion_proof_depth: u64,
+}
+
+impl FuluPreset {
+    #[must_use]
+    pub const fn new<P: Preset>() -> Self {
+        Self {
+            max_blobs_per_block_fulu: P::MaxBlobsPerBlockFulu::U64,
+            kzg_commitments_inclusion_proof_depth: P::KzgCommitmentsInclusionProofDepth::U64,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::ops::Deref;
@@ -965,6 +1013,7 @@ mod tests {
                 &preset_name.capella_preset(),
                 &preset_name.deneb_preset(),
                 &preset_name.electra_preset(),
+                &preset_name.fulu_preset(),
             ];
         }
     }

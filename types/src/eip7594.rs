@@ -13,20 +13,21 @@ use crate::{
     preset::Preset,
 };
 
+// const
+pub type NumberOfColumns = U128;
 type FieldElementsPerCell = U64;
+type KzgCommitmentsInclusionProofDepth = U4;
 type BytesPerCell = Prod<BytesPerFieldElement, FieldElementsPerCell>;
 
-pub type CellIndex = u64;
+// primitives
 pub type RowIndex = u64;
 pub type ColumnIndex = u64;
 pub type CustodyIndex = u64;
-pub type NumberOfColumns = U128;
-type KzgCommitmentsInclusionProofDepth = U4;
-pub const NUMBER_OF_CUSTODY_GROUPS: u64 = 128;
-
 pub type Cell = Box<ByteVector<BytesPerCell>>;
+type DataColumn<P> = ContiguousList<Cell, <P as Preset>::MaxBlobCommitmentsPerBlock>;
 pub type BlobCommitmentsInclusionProof = ContiguousVector<H256, KzgCommitmentsInclusionProofDepth>;
 
+// container
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize, Serialize, Ssz)]
 #[serde(deny_unknown_fields)]
 pub struct DataColumnIdentifier {
@@ -47,6 +48,7 @@ pub struct DataColumnSidecar<P: Preset> {
     pub kzg_commitments_inclusion_proof: BlobCommitmentsInclusionProof,
 }
 
+// container_impl
 impl<P: Preset> DataColumnSidecar<P> {
     #[must_use]
     pub const fn slot(&self) -> u64 {
