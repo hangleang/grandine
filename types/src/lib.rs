@@ -78,11 +78,23 @@ pub mod electra {
     mod spec_tests;
 }
 
+pub mod fulu {
+    pub mod beacon_state;
+    pub mod consts;
+    pub mod containers;
+    pub mod primitives;
+
+    mod container_impls;
+
+    #[cfg(test)]
+    mod spec_tests;
+}
+
+mod collections;
+
 mod unphased {
     pub mod consts;
 
     #[cfg(test)]
     pub mod spec_tests;
 }
-
-mod collections;

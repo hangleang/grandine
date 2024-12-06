@@ -171,6 +171,13 @@ pub trait Preset: Copy + Eq + Ord + Hash + Default + Debug + Send + Sync + 'stat
         + Send
         + Sync;
 
+    // Fulu
+    type KzgCommitmentsInclusionProofDepth: ContiguousVectorElements<H256>
+        + MerkleElements<H256>
+        + ArrayLength<H256, ArrayType: Copy>
+        + Debug
+        + Eq;
+
     // Derived type-level variables
     type MaxAggregatorsPerSlot: MerkleElements<ValidatorIndex>
         + MerkleBits
@@ -291,6 +298,9 @@ impl Preset for Mainnet {
     type PendingConsolidationsLimit = U262144;
     type PendingPartialWithdrawalsLimit = U134217728;
 
+    // Fulu
+    type KzgCommitmentsInclusionProofDepth = U4;
+
     // Derived type-level variables
     type MaxAggregatorsPerSlot = Prod<Self::MaxValidatorsPerCommittee, Self::MaxCommitteesPerSlot>;
 
@@ -353,6 +363,9 @@ impl Preset for Minimal {
         type MaxAttesterSlashingsElectra;
         type MaxConsolidationRequestsPerPayload;
         type PendingDepositsLimit;
+
+        // Fulu
+        type KzgCommitmentsInclusionProofDepth;
     }
 
     // Phase 0
@@ -455,6 +468,9 @@ impl Preset for Medalla {
         type PendingConsolidationsLimit;
         type PendingPartialWithdrawalsLimit;
 
+        // Fulu
+        type KzgCommitmentsInclusionProofDepth;
+
         // Derived type-level variables
         type MaxAggregatorsPerSlot;
     }
@@ -548,6 +564,15 @@ impl PresetName {
             Self::Mainnet => ElectraPreset::new::<Mainnet>(),
             Self::Minimal => ElectraPreset::new::<Minimal>(),
             Self::Medalla => ElectraPreset::new::<Medalla>(),
+        }
+    }
+
+    #[must_use]
+    pub const fn fulu_preset(self) -> FuluPreset {
+        match self {
+            Self::Mainnet => FuluPreset::new::<Mainnet>(),
+            Self::Minimal => FuluPreset::new::<Minimal>(),
+            Self::Medalla => FuluPreset::new::<Medalla>(),
         }
     }
 
@@ -897,6 +922,22 @@ impl ElectraPreset {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "SCREAMING_SNAKE_CASE")]
+pub struct FuluPreset {
+    #[serde(with = "serde_utils::string_or_native")]
+    kzg_commitments_inclusion_proof_depth: u64,
+}
+
+impl FuluPreset {
+    #[must_use]
+    pub const fn new<P: Preset>() -> Self {
+        Self {
+            kzg_commitments_inclusion_proof_depth: P::KzgCommitmentsInclusionProofDepth::U64,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::ops::Deref;
@@ -951,6 +992,7 @@ mod tests {
                 &preset_name.capella_preset(),
                 &preset_name.deneb_preset(),
                 &preset_name.electra_preset(),
+                &preset_name.fulu_preset(),
             ];
         }
     }
