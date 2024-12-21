@@ -208,8 +208,6 @@ fn process_execution_payload<P: Preset>(
 
     process_execution_payload_for_gossip(config, state, body)?;
 
-    // TODO(feature/electra): Verify `is_valid_block_hash`.
-    // TODO(feature/electra): Verify `versioned_hashes`.
     // > Verify the execution payload is valid
     let versioned_hashes = body
         .blob_kzg_commitments

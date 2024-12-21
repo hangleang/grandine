@@ -73,8 +73,6 @@ pub struct Config {
     pub electra_fork_epoch: Epoch,
     pub electra_fork_version: Version,
     #[serde(with = "serde_utils::string_or_native")]
-    pub eip7594_fork_epoch: Epoch,
-    #[serde(with = "serde_utils::string_or_native")]
     pub fulu_fork_epoch: Epoch,
     pub fulu_fork_version: Version,
 
@@ -220,7 +218,6 @@ impl Default for Config {
             deneb_fork_version: H32(hex!("04000000")),
             electra_fork_epoch: FAR_FUTURE_EPOCH,
             electra_fork_version: H32(hex!("05000000")),
-            eip7594_fork_epoch: FAR_FUTURE_EPOCH,
             fulu_fork_epoch: FAR_FUTURE_EPOCH,
             fulu_fork_version: H32(hex!("06000000")),
 
@@ -802,13 +799,8 @@ impl Config {
     }
 
     #[must_use]
-    pub const fn is_eip7594_fork(&self, epoch: Epoch) -> bool {
-        epoch >= self.eip7594_fork_epoch
-    }
-
-    #[must_use]
-    pub const fn is_eip7594_fork_epoch_set(&self) -> bool {
-        self.eip7594_fork_epoch != FAR_FUTURE_EPOCH
+    pub const fn is_peerdas_scheduled(&self) -> bool {
+        self.fulu_fork_epoch != FAR_FUTURE_EPOCH
     }
 
     #[must_use]
@@ -838,6 +830,22 @@ impl Config {
                 self.max_request_blob_sidecars
             }
             Phase::Electra | Phase::Fulu => self.max_request_blob_sidecars_electra,
+        }
+    }
+
+    #[must_use]
+    pub fn max_blob_sideacar_subnet_count(&self) -> u64 {
+        self.blob_sidecar_subnet_count
+            .get()
+            .max(self.blob_sidecar_subnet_count_electra.get())
+    }
+
+    #[must_use]
+    pub const fn custody_group_count(&self, subscribe_all_data_column_subnets: bool) -> u64 {
+        if subscribe_all_data_column_subnets {
+            self.number_of_custody_groups
+        } else {
+            self.custody_requirement
         }
     }
 

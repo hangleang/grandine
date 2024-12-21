@@ -508,7 +508,7 @@ impl SlashingProtector {
             .map_err(Into::into)
     }
 
-    pub fn validate_and_store_proposal(
+    fn validate_and_store_proposal(
         &mut self,
         proposal: BlockProposal,
         pubkey: PublicKeyBytes,

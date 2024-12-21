@@ -1,12 +1,17 @@
-use ssz::ContiguousList;
+use core::fmt;
+
+use ssz::{ContiguousList, SszHash as _};
 
 use crate::{
     deneb::{
         containers::{ExecutionPayload, ExecutionPayloadHeader},
-        primitives::KzgCommitment,
+        primitives::{KzgCommitment, KzgProof},
     },
     electra::containers::ExecutionRequests,
-    fulu::containers::{BeaconBlock, BeaconBlockBody, BlindedBeaconBlock, BlindedBeaconBlockBody},
+    fulu::containers::{
+        BeaconBlock, BeaconBlockBody, BlindedBeaconBlock, BlindedBeaconBlockBody,
+        DataColumnIdentifier, DataColumnSidecar,
+    },
     phase0::primitives::H256,
     preset::Preset,
 };
@@ -121,5 +126,52 @@ impl<P: Preset> BlindedBeaconBlock<P> {
     pub const fn with_state_root(mut self, state_root: H256) -> Self {
         self.state_root = state_root;
         self
+    }
+}
+
+impl<P: Preset> DataColumnSidecar<P> {
+    #[must_use]
+    pub const fn slot(&self) -> u64 {
+        self.signed_block_header.message.slot
+    }
+
+    #[must_use]
+    pub fn full() -> Self {
+        Self {
+            column: ContiguousList::full(Box::default()),
+            kzg_commitments: ContiguousList::full(KzgCommitment::repeat_byte(u8::MAX)),
+            kzg_proofs: ContiguousList::full(KzgProof::repeat_byte(u8::MAX)),
+            ..Default::default()
+        }
+    }
+}
+
+#[expect(clippy::missing_fields_in_debug)]
+impl<P: Preset> fmt::Debug for DataColumnSidecar<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DataColumnSidecar")
+            .field("index", &self.index)
+            .field(
+                "kzg_commitments_inclusion_proof",
+                &self.kzg_commitments_inclusion_proof,
+            )
+            .field("signed_block_header", &self.signed_block_header)
+            .field("kzg_commitments", &self.kzg_commitments)
+            .finish()
+    }
+}
+
+impl<P: Preset> From<&DataColumnSidecar<P>> for DataColumnIdentifier {
+    fn from(sidecar: &DataColumnSidecar<P>) -> Self {
+        let DataColumnSidecar {
+            index,
+            signed_block_header,
+            ..
+        } = *sidecar;
+
+        let block_header = signed_block_header.message;
+        let block_root = block_header.hash_tree_root();
+
+        Self { block_root, index }
     }
 }

@@ -18,7 +18,6 @@ IGNORED_GLOBS = %w[
   tests/*/*/light_client/data_collection/pyspec_tests/*/*.{ssz_snappy,yaml}
   tests/*/eip6110/*/*/*/*/*.{ssz_snappy,yaml}
   tests/*/eip7441/*/*/*/*/*.{ssz_snappy,yaml}
-  tests/*/fulu/*/*/*/*/*.{ssz_snappy,yaml}
   tests/diagnostics_obj.json{,.lock}
 ].map! { |glob| File.join(SUBMODULE, glob) }
 

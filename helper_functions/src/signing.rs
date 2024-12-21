@@ -22,8 +22,7 @@ use types::{
         BlindedBeaconBlock,
     },
     config::Config,
-    deneb::{consts::DOMAIN_BLOB_SIDECAR, containers::BeaconBlock as DenebBeaconBlock},
-    eip7594::DataColumnSidecar,
+    deneb::containers::BeaconBlock as DenebBeaconBlock,
     electra::containers::{
         AggregateAndProof as ElectraAggregateAndProof, BeaconBlock as ElectraBeaconBlock,
     },
@@ -426,21 +425,6 @@ impl<P: Preset> SignForSingleFork<P> for VoluntaryExit {
             accessors::get_domain(config, beacon_state, domain_type, Some(epoch))
         };
 
-        misc::compute_signing_root(self, domain)
-    }
-}
-
-// labai gali buti, kad neteisingas
-impl<P: Preset> SignForSingleFork<P> for DataColumnSidecar<P> {
-    const DOMAIN_TYPE: DomainType = DOMAIN_BLOB_SIDECAR;
-    const SIGNATURE_KIND: SignatureKind = SignatureKind::BlobSidecar;
-
-    fn epoch(&self) -> Epoch {
-        misc::compute_epoch_at_slot::<P>(self.signed_block_header.message.slot)
-    }
-
-    fn signing_root(&self, config: &Config, beacon_state: &(impl BeaconState<P> + ?Sized)) -> H256 {
-        let domain = accessors::get_domain(config, beacon_state, Self::DOMAIN_TYPE, None);
         misc::compute_signing_root(self, domain)
     }
 }

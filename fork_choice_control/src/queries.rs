@@ -18,7 +18,11 @@ use thiserror::Error;
 use types::{
     combined::{BeaconState, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, NumberOfColumns},
+    fulu::{
+        consts::NumberOfColumns,
+        containers::{DataColumnIdentifier, DataColumnSidecar},
+        primitives::ColumnIndex,
+    },
     nonstandard::{PayloadStatus, Phase, WithStatus},
     phase0::{
         containers::Checkpoint,
@@ -508,6 +512,7 @@ where
         &self,
         range: Range<Slot>,
         columns: &ContiguousList<ColumnIndex, NumberOfColumns>,
+        max_request_data_column_sidecars: usize,
     ) -> Result<Vec<Arc<DataColumnSidecar<P>>>> {
         let canonical_chain_blocks = self.blocks_by_range(range)?;
 
@@ -521,7 +526,8 @@ where
                     })
                 })
             })
-            .flatten();
+            .flatten()
+            .take(max_request_data_column_sidecars);
 
         self.data_column_sidecars_by_ids(data_column_ids)
     }
