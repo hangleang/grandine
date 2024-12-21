@@ -23,7 +23,10 @@ use types::{
             Blob, BlobCommitmentInclusionProof, BlobIndex, KzgCommitment, KzgProof, VersionedHash,
         },
     },
-    eip7594::ColumnIndex,
+    fulu::{
+        containers::{DataColumnSidecar, MatrixEntry},
+        primitives::{BlobCommitmentsInclusionProof, ColumnIndex},
+    },
     phase0::{
         consts::{
             AttestationSubnetCount, BLS_WITHDRAWAL_PREFIX, ETH1_ADDRESS_WITHDRAWAL_PREFIX,
@@ -576,6 +579,44 @@ pub fn electra_kzg_commitment_inclusion_proof<P: Preset>(
     Ok(proof)
 }
 
+pub fn kzg_commitments_inclusion_proof<P: Preset>(
+    body: &(impl PostElectraBeaconBlockBody<P> + ?Sized),
+) -> BlobCommitmentsInclusionProof<P> {
+    let depth = P::KzgCommitmentsInclusionProofDepth::USIZE;
+    let mut proof = BlobCommitmentsInclusionProof::<P>::default();
+
+    proof[depth - 4] = body.bls_to_execution_changes().hash_tree_root();
+
+    proof[depth - 3] = hashing::hash_256_256(
+        body.sync_aggregate().hash_tree_root(),
+        body.execution_payload().hash_tree_root(),
+    );
+
+    proof[depth - 2] = hashing::hash_256_256(
+        hashing::hash_256_256(body.execution_requests().hash_tree_root(), ZERO_HASHES[0]),
+        ZERO_HASHES[1],
+    );
+
+    proof[depth - 1] = hashing::hash_256_256(
+        hashing::hash_256_256(
+            hashing::hash_256_256(
+                body.randao_reveal().hash_tree_root(),
+                body.eth1_data().hash_tree_root(),
+            ),
+            hashing::hash_256_256(body.graffiti(), body.proposer_slashings().hash_tree_root()),
+        ),
+        hashing::hash_256_256(
+            hashing::hash_256_256(body.attester_slashings_root(), body.attestations_root()),
+            hashing::hash_256_256(
+                body.deposits().hash_tree_root(),
+                body.voluntary_exits().hash_tree_root(),
+            ),
+        ),
+    );
+
+    proof
+}
+
 #[must_use]
 pub fn blob_serve_range_slot<P: Preset>(config: &Config, current_slot: Slot) -> Slot {
     let current_epoch = compute_epoch_at_slot::<P>(current_slot);
@@ -679,13 +720,37 @@ pub fn get_max_effective_balance<P: Preset>(validator: &Validator) -> Gwei {
 #[must_use]
 pub fn data_column_serve_range_slot<P: Preset>(config: &Config, current_slot: Slot) -> Slot {
     let current_epoch = compute_epoch_at_slot::<P>(current_slot);
-    let epoch = config.eip7594_fork_epoch.max(
+    let epoch = config.fulu_fork_epoch.max(
         current_epoch
             .checked_sub(config.min_epochs_for_data_column_sidecars_requests)
             .unwrap_or(GENESIS_EPOCH),
     );
 
     compute_start_slot_at_epoch::<P>(epoch)
+}
+
+pub fn compute_matrix_for_data_column_sidecar<P: Preset>(
+    data_column_sidecar: &DataColumnSidecar<P>,
+) -> Vec<MatrixEntry> {
+    let DataColumnSidecar {
+        index,
+        column,
+        kzg_proofs,
+        ..
+    } = data_column_sidecar;
+
+    let blob_count = column.len() as u64;
+
+    (0..blob_count)
+        .zip(column)
+        .zip(kzg_proofs)
+        .map(|((row_index, cell), kzg_proof)| MatrixEntry {
+            row_index,
+            column_index: *index,
+            cell: cell.clone(),
+            kzg_proof: *kzg_proof,
+        })
+        .collect()
 }
 
 #[cfg(test)]

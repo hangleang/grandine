@@ -665,7 +665,7 @@ pub fn upgrade_to_electra<P: Preset>(
     Ok(post)
 }
 
-#[allow(clippy::too_many_lines)]
+#[must_use]
 pub fn upgrade_to_fulu<P: Preset>(
     config: &Config,
     pre: ElectraBeaconState<P>,

@@ -23,7 +23,10 @@ use serde::Serialize;
 use types::{
     combined::{Attestation, BeaconState, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar, MatrixEntry},
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnSidecar, MatrixEntry},
+        primitives::ColumnIndex,
+    },
     phase0::{
         containers::Checkpoint,
         primitives::{DepositIndex, ExecutionBlockHash, Slot, ValidatorIndex, H256},
@@ -157,12 +160,12 @@ pub enum MutatorMessage<P: Preset, W> {
     Stop {
         save_to_storage: bool,
     },
-    StoreSampleColumns {
-        sample_columns: HashSet<ColumnIndex>,
+    StoreSamplingColumns {
+        sampling_columns: HashSet<ColumnIndex>,
     },
     ReconstructedMissingColumns {
-        wait_group: W,
-        block: Arc<SignedBeaconBlock<P>>,
+        block_root: H256,
+        blob_count: usize,
         full_matrix: Vec<MatrixEntry>,
     },
 }
@@ -187,13 +190,14 @@ pub enum P2pMessage<P: Preset> {
     Accept(GossipId),
     Ignore(GossipId),
     PublishBlobSidecar(Arc<BlobSidecar<P>>),
+    PublishDataColumnSidecar(Arc<DataColumnSidecar<P>>),
     Reject(GossipId, MutatorRejectionReason),
     BlockNeeded(H256, Option<PeerId>),
     BlobsNeeded(Vec<BlobIdentifier>, Slot, Option<PeerId>),
     DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot, Option<PeerId>),
+    DataColumnReconstructed(Arc<DataColumnSidecar<P>>),
     FinalizedCheckpoint(Checkpoint),
     HeadState(#[cfg_attr(test, derivative(Debug = "ignore"))] Arc<BeaconState<P>>),
-    DataColumnsReconstructed(Vec<Arc<DataColumnSidecar<P>>>, Slot),
 }
 
 impl<P: Preset> P2pMessage<P> {

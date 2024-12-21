@@ -16,7 +16,10 @@ use types::{
     altair::containers::{SignedContributionAndProof, SyncCommitteeMessage},
     combined::{Attestation, AttesterSlashing, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnSidecar},
+        primitives::ColumnIndex,
+    },
     nonstandard::Phase,
     phase0::{
         containers::{ProposerSlashing, SignedVoluntaryExit},
@@ -126,7 +129,6 @@ pub enum SyncToP2p {
     RequestBlockByRoot(RequestId, PeerId, H256),
     RequestPeerStatus(RequestId, PeerId),
     SubscribeToCoreTopics,
-    SubscribeToDataColumnTopics,
 }
 
 impl SyncToP2p {
@@ -210,8 +212,10 @@ pub enum ServiceInboundMessage<P: Preset> {
     Subscribe(GossipTopic),
     SubscribeKind(GossipKind),
     SubscribeNewForkTopics(Phase, ForkDigest),
+    SubscribeToDataColumnTopics(ForkDigest),
     Unsubscribe(GossipTopic),
     UnsubscribeFromForkTopicsExcept(ForkDigest),
+    UnsubscribeKind(GossipKind),
     UpdateEnrSubnet(Subnet, bool),
     UpdateFork(EnrForkId),
     UpdateGossipsubParameters(u64, Slot),

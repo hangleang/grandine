@@ -63,7 +63,7 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    eip7594::DataColumnSidecar,
+    fulu::containers::DataColumnSidecar,
     nonstandard::{
         BlockRewards, Phase, RelativeEpoch, ValidationOutcome, WithBlobsAndMev, WithStatus,
         WEI_IN_GWEI,
@@ -984,14 +984,11 @@ pub async fn publish_block<P: Preset, W: Wait>(
     let (signed_beacon_block, proofs, blobs) = signed_api_block.split();
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller
-        .chain_config()
-        .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
-    {
+    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
         let cells_and_kzg_proofs =
-            eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars =
-            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
+            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
 
         publish_signed_block_with_data_column_sidecar(
             Arc::new(signed_beacon_block),
@@ -1045,15 +1042,12 @@ pub async fn publish_blinded_block<P: Preset, W: Wait>(
 
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller
-        .chain_config()
-        .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
-    {
-        let cells_and_kzg_proofs = eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(
+    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
+        let cells_and_kzg_proofs = eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
             blobs.unwrap_or_default().into_iter(),
         )?;
         let data_column_sidecars =
-            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
+            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
 
         publish_signed_block_with_data_column_sidecar(
             signed_beacon_block,
@@ -1132,14 +1126,11 @@ pub async fn publish_block_v2<P: Preset, W: Wait>(
     let (signed_beacon_block, proofs, blobs) = signed_api_block.split();
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller
-        .chain_config()
-        .is_eip7594_fork(misc::compute_epoch_at_slot::<P>(slot))
-    {
+    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
         let cells_and_kzg_proofs =
-            eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars =
-            eip_7594::get_data_column_sidecars(&signed_beacon_block, cells_and_kzg_proofs)?;
+            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
 
         publish_signed_block_v2_with_data_column_sidecar(
             Arc::new(signed_beacon_block),
@@ -2793,7 +2784,6 @@ async fn publish_signed_block_with_data_column_sidecar<P: Preset, W: Wait>(
     Ok(status_code)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn publish_signed_block_v2<P: Preset, W: Wait>(
     block: Arc<SignedBeaconBlock<P>>,
     blob_sidecars: Vec<BlobSidecar<P>>,
@@ -2885,7 +2875,6 @@ async fn publish_signed_block_v2<P: Preset, W: Wait>(
 }
 
 // TODO(feature/das): merge with `publish_signed_block_v2`
-#[allow(clippy::too_many_arguments)]
 async fn publish_signed_block_v2_with_data_column_sidecar<P: Preset, W: Wait>(
     block: Arc<SignedBeaconBlock<P>>,
     data_column_sidecars: Vec<DataColumnSidecar<P>>,

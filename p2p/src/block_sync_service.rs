@@ -13,7 +13,7 @@ use futures::{
 };
 use genesis::AnchorCheckpointProvider;
 use helper_functions::misc;
-use itertools::Itertools;
+use itertools::Itertools as _;
 use log::{debug, error, info};
 use prometheus_metrics::Metrics;
 use ssz::{SszReadDefault, SszWrite as _};
@@ -23,7 +23,7 @@ use tokio::select;
 use tokio_stream::wrappers::IntervalStream;
 use types::{
     deneb::containers::BlobIdentifier,
-    eip7594::DataColumnIdentifier,
+    fulu::containers::DataColumnIdentifier,
     phase0::primitives::{Slot, H256},
     preset::Preset,
 };
@@ -78,6 +78,7 @@ pub struct BlockSyncService<P: Preset> {
 }
 
 impl<P: Preset> BlockSyncService<P> {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         db: Database,
         anchor_checkpoint_provider: AnchorCheckpointProvider<P>,
@@ -243,17 +244,12 @@ impl<P: Preset> BlockSyncService<P> {
                         }
                         P2pToSync::RemovePeer(peer_id) => {
                             let batches_to_retry = self.sync_manager.remove_peer(&peer_id);
-                            if self.retry_sync_batches(batches_to_retry).is_err() {
-                                error!("Batch could not retried while removing peer: {peer_id}");
-                            }
+                            self.retry_sync_batches(batches_to_retry)?;
                         }
                         P2pToSync::RequestFailed(peer_id) => {
                             if !self.is_forward_synced {
                                 let batches_to_retry = self.sync_manager.remove_peer(&peer_id);
-
-                                if self.retry_sync_batches(batches_to_retry).is_err() {
-                                    error!("Batch could not retired when request failed");
-                                }
+                                self.retry_sync_batches(batches_to_retry)?;
                             }
                         }
                         P2pToSync::StatusPeer(peer_id) => {
@@ -387,12 +383,11 @@ impl<P: Preset> BlockSyncService<P> {
                 .send(&self.sync_to_p2p_tx);
 
                 match target {
-                    // TODO(feature/das): we should reconstruct the batch by:
-                    // - [ ] filter out the columns that are already received or accepted,
-                    // - [x] filter out peer that are their head slot is less than start slot
-                    SyncTarget::DataColumnSidecar(columns) => Some(
-                        self.sync_manager
-                            .map_peer_custody_columns(&columns, start_slot, None, Some(peer_id))
+                    SyncTarget::DataColumnSidecar(ref columns) => match self
+                        .sync_manager
+                        .map_peer_custody_columns(columns, Some(peer_id))
+                    {
+                        Ok(mapping) => Some(mapping
                             .into_iter()
                             .map(|(new_peer_id, peer_custody_columns)| SyncBatch {
                                 target: SyncTarget::DataColumnSidecar(peer_custody_columns),
@@ -401,12 +396,27 @@ impl<P: Preset> BlockSyncService<P> {
                                 start_slot,
                                 count,
                             })
-                            .collect_vec(),
-                    ),
-                    SyncTarget::Block | SyncTarget::BlobSidecar => self
-                        .sync_manager
-                        .random_peer_with_head_slot_filtered(start_slot)
-                        .map(|new_peer_id| {
+                            .collect()),
+                        Err(error) => {
+                            error!(
+                                "could not find reliable peers to request column sidecars: {}, error: {}",
+                                columns.iter().join(", "),
+                                error,
+                            );
+
+                            self.sync_manager.random_peer().map(|new_peer_id| {
+                                vec![SyncBatch {
+                                    target,
+                                    direction,
+                                    peer_id: new_peer_id,
+                                    start_slot,
+                                    count,
+                                }]
+                            })
+                        }
+                    }
+                    SyncTarget::Block | SyncTarget::BlobSidecar => {
+                        self.sync_manager.random_peer().map(|new_peer_id| {
                             vec![SyncBatch {
                                 target,
                                 direction,
@@ -414,7 +424,8 @@ impl<P: Preset> BlockSyncService<P> {
                                 start_slot,
                                 count,
                             }]
-                        }),
+                        })
+                    }
                 }
             })
             .flatten()
@@ -593,31 +604,56 @@ impl<P: Preset> BlockSyncService<P> {
             return Ok(());
         }
 
-        let first_id = identifiers
-            .first()
-            .expect("must request at least 1 data column sidecar");
-        let columns_indices = identifiers.iter().map(|id| id.index).collect();
-        let peer_custody_columns_mapping =
-            self.sync_manager
-                .map_peer_custody_columns(&columns_indices, slot, peer_id, None);
+        let columns_indices = identifiers.iter().map(|id| id.index).collect::<Vec<_>>();
+        match self
+            .sync_manager
+            .map_peer_custody_columns(&columns_indices, None)
+        {
+            Ok(peer_custody_columns_mapping) => {
+                for (peer_id, columns) in peer_custody_columns_mapping {
+                    if !columns.is_empty() {
+                        let request_id = self.request_id()?;
 
-        for (peer_id, columns) in peer_custody_columns_mapping {
-            if !columns.is_empty() {
+                        let custody_columns = identifiers
+                            .iter()
+                            .filter_map(|id| columns.contains(&id.index).then_some(*id))
+                            .collect::<Vec<_>>();
+                        let data_column_ids = self
+                            .sync_manager
+                            .add_data_columns_request_by_root(custody_columns, peer_id);
+
+                        if !data_column_ids.is_empty() {
+                            SyncToP2p::RequestDataColumnsByRoot(
+                                request_id,
+                                peer_id,
+                                data_column_ids,
+                            )
+                            .send(&self.sync_to_p2p_tx);
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                error!(
+                    "could not find reliable custodial peers to request column sidecars: {}, error: {}",
+                    columns_indices.into_iter().join(", "),
+                    error,
+                );
+
                 let request_id = self.request_id()?;
 
-                let peer_custody_columns = columns
-                    .into_iter()
-                    .map(|index| DataColumnIdentifier {
-                        index,
-                        block_root: first_id.block_root,
-                    })
-                    .collect::<Vec<_>>();
-                let data_column_identifiers = self
-                    .sync_manager
-                    .add_data_columns_request_by_root(peer_custody_columns, peer_id);
+                let Some(peer_id) = peer_id.or_else(|| self.sync_manager.random_peer()) else {
+                    return Ok(());
+                };
 
-                SyncToP2p::RequestDataColumnsByRoot(request_id, peer_id, data_column_identifiers)
-                    .send(&self.sync_to_p2p_tx);
+                let data_column_ids = self
+                    .sync_manager
+                    .add_data_columns_request_by_root(identifiers, peer_id);
+
+                if !data_column_ids.is_empty() {
+                    SyncToP2p::RequestDataColumnsByRoot(request_id, peer_id, data_column_ids)
+                        .send(&self.sync_to_p2p_tx);
+                }
             }
         }
 
@@ -644,9 +680,7 @@ impl<P: Preset> BlockSyncService<P> {
 
         let request_id = self.request_id()?;
 
-        let Some(peer_id) =
-            peer_id.or_else(|| self.sync_manager.random_peer_with_head_slot_filtered(slot))
-        else {
+        let Some(peer_id) = peer_id.or_else(|| self.sync_manager.random_peer()) else {
             return Ok(());
         };
 
@@ -734,10 +768,6 @@ impl<P: Preset> BlockSyncService<P> {
 
         if !was_forward_synced && is_forward_synced {
             SyncToP2p::SubscribeToCoreTopics.send(&self.sync_to_p2p_tx);
-
-            if self.controller.chain_config().is_eip7594_fork_epoch_set() {
-                SyncToP2p::SubscribeToDataColumnTopics.send(&self.sync_to_p2p_tx);
-            }
 
             if self.back_sync.is_some() {
                 SyncToP2p::PruneReceivedBlocks.send(&self.sync_to_p2p_tx);

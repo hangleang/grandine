@@ -25,8 +25,8 @@ use crate::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::{Blob, KzgCommitment, KzgProof},
     },
-    eip7594::{DataColumnIdentifier, DataColumnSidecar},
     electra::containers::ExecutionRequests,
+    fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
     phase0::primitives::{Gwei, Uint256, UnixSeconds, ValidatorIndex, H256},
     preset::Preset,
 };

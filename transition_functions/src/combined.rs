@@ -244,6 +244,7 @@ pub fn verify_signatures<P: Preset>(
     }
 }
 
+#[expect(clippy::too_many_lines)]
 pub fn process_slots<P: Preset>(
     config: &Config,
     state: &mut BeaconState<P>,

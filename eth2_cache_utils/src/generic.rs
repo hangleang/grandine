@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use itertools::Itertools;
+use itertools::Itertools as _;
 use spec_test_utils::Case;
 use types::{
     combined::{BeaconState, SignedBeaconBlock},

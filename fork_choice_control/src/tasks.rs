@@ -23,7 +23,7 @@ use prometheus_metrics::Metrics;
 use types::{
     combined::{AttesterSlashing, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::BlobSidecar,
-    eip7594::DataColumnSidecar,
+    fulu::containers::DataColumnSidecar,
     nonstandard::{RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
@@ -390,7 +390,6 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
             block_seen,
             &origin,
             store_snapshot.slot(),
-            MultiVerifier::default(),
             &metrics,
         );
 
@@ -488,10 +487,8 @@ impl<P: Preset, W> Run for PersistDataColumnSidecarsTask<P, W> {
 pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
-    pub wait_group: W,
-    pub block: Arc<SignedBeaconBlock<P>>,
+    pub block_root: H256,
     pub blob_count: usize,
-    pub metrics: Option<Arc<Metrics>>,
 }
 
 impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
@@ -499,28 +496,22 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
         let Self {
             store_snapshot,
             mutator_tx,
-            wait_group,
-            block,
+            block_root,
             blob_count,
-            metrics,
         } = self;
 
-        let _timer = metrics
-            .as_ref()
-            .map(|metrics| metrics.columns_reconstruction_time.start_timer());
-
-        let available_columns = store_snapshot.available_columns_at_block(&block);
+        let available_columns = store_snapshot.available_columns_at_block(block_root);
 
         let partial_matrix = available_columns
             .into_iter()
-            .flat_map(|sidecar| eip_7594::compute_matrix_for_data_column_sidecar(&sidecar))
+            .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
             .collect::<Vec<_>>();
 
-        match eip_7594::recover_matrix(partial_matrix, blob_count, &metrics) {
+        match eip_7594::recover_matrix(&partial_matrix, blob_count) {
             Ok(full_matrix) => {
                 MutatorMessage::ReconstructedMissingColumns {
-                    wait_group,
-                    block,
+                    block_root,
+                    blob_count,
                     full_matrix,
                 }
                 .send(&mutator_tx);

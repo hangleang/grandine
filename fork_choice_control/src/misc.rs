@@ -13,7 +13,7 @@ use strum::IntoStaticStr;
 use types::{
     combined::{SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::BlobSidecar,
-    eip7594::DataColumnSidecar,
+    fulu::containers::DataColumnSidecar,
     phase0::primitives::ValidatorIndex,
     preset::Preset,
 };
