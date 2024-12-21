@@ -189,8 +189,8 @@ fn run_case<P: Preset>(config: &Arc<Config>, case: Case) {
             } => {
                 type BlobBundle<P> =
                     ContiguousList<Blob<P>, <P as Preset>::MaxBlobCommitmentsPerBlock>;
-                let mut expected_blob_count = 0;
 
+                let mut expected_blob_count = 0;
                 let block = case.ssz::<_, Arc<SignedBeaconBlock<P>>>(config.as_ref(), block);
 
                 if let Some(body) = block.message().body().post_deneb() {

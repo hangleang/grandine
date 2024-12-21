@@ -23,7 +23,10 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnSidecar},
+        primitives::ColumnIndex,
+    },
     nonstandard::{BlobSidecarWithId, DataColumnSidecarWithId, FinalizedCheckpoint},
     phase0::{
         consts::GENESIS_SLOT,
@@ -553,12 +556,12 @@ impl<P: Preset> Storage<P> {
             let slot = data_column_sidecar.signed_block_header.message.slot;
 
             batch.push(serialize(
-                DataColumnSidecarByColumnIndex(block_root, index),
+                DataColumnSidecarByColumnId(block_root, index),
                 data_column_sidecar,
             )?);
 
             batch.push(serialize(
-                SlotColumnIndex(slot, block_root, index),
+                SlotColumnId(slot, block_root, index),
                 data_column_id,
             )?);
 
@@ -576,7 +579,42 @@ impl<P: Preset> Storage<P> {
     ) -> Result<Option<Arc<DataColumnSidecar<P>>>> {
         let DataColumnIdentifier { block_root, index } = data_column_id;
 
-        self.get(DataColumnSidecarByColumnIndex(block_root, index))
+        self.get(DataColumnSidecarByColumnId(block_root, index))
+    }
+
+    pub(crate) fn prune_old_data_column_sidecars(&self, up_to_slot: Slot) -> Result<()> {
+        let mut columns_to_remove: Vec<DataColumnIdentifier> = vec![];
+        let mut keys_to_remove = vec![];
+
+        let results = self
+            .database
+            .iterator_descending(..=SlotColumnId(up_to_slot, H256::zero(), 0).to_string())?;
+
+        for result in results {
+            let (key_bytes, value_bytes) = result?;
+
+            if !SlotColumnId::has_prefix(&key_bytes) {
+                break;
+            }
+
+            // Deserialize-serialize DataColumnIdentifier as an additional measure
+            // to prevent other types of data getting accidentally deleted.
+            columns_to_remove.push(DataColumnIdentifier::from_ssz_default(value_bytes)?);
+            keys_to_remove.push(key_bytes.into_owned());
+        }
+
+        for column_id in columns_to_remove {
+            let DataColumnIdentifier { block_root, index } = column_id;
+            let key = DataColumnSidecarByColumnId(block_root, index).to_string();
+
+            self.database.delete(key)?;
+        }
+
+        for key in keys_to_remove {
+            self.database.delete(key)?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn checkpoint_state_slot(&self) -> Result<Option<Slot>> {
@@ -1154,23 +1192,23 @@ impl PrefixableKey for SlotBlobId {
 
 #[derive(Display)]
 #[display("{}{_0:x}{_1}", Self::PREFIX)]
-pub struct DataColumnSidecarByColumnIndex(pub H256, pub ColumnIndex);
+pub struct DataColumnSidecarByColumnId(pub H256, pub ColumnIndex);
 
-impl DataColumnSidecarByColumnIndex {
+impl PrefixableKey for DataColumnSidecarByColumnId {
     const PREFIX: &'static str = "d";
-}
-
-#[derive(Display)]
-#[display("{}{_0:020}{_1:x}{_2}", Self::PREFIX)]
-pub struct SlotColumnIndex(pub Slot, pub H256, pub ColumnIndex);
-
-impl SlotColumnIndex {
-    const PREFIX: &'static str = "c";
 
     #[cfg(test)]
     fn has_prefix(bytes: &[u8]) -> bool {
         bytes.starts_with(Self::PREFIX.as_bytes())
     }
+}
+
+#[derive(Display)]
+#[display("{}{_0:020}{_1:x}{_2}", Self::PREFIX)]
+pub struct SlotColumnId(pub Slot, pub H256, pub ColumnIndex);
+
+impl PrefixableKey for SlotColumnId {
+    const PREFIX: &'static str = "c";
 }
 
 #[derive(Debug, Error)]

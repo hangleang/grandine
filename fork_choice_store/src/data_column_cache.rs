@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use std_ext::ArcExt as _;
 use types::{
-    eip7594::{DataColumnIdentifier, DataColumnSidecar},
+    fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
     nonstandard::DataColumnSidecarWithId,
     phase0::primitives::Slot,
     preset::Preset,

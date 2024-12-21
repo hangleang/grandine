@@ -158,6 +158,10 @@ struct ChainOptions {
     #[clap(long, value_name = "YAML_FILE")]
     verify_electra_preset_file: Option<PathBuf>,
 
+    /// Verify that Fulu variables in preset match YAML_FILE
+    #[clap(long, value_name = "YAML_FILE")]
+    verify_fulu_preset_file: Option<PathBuf>,
+
     /// Verify that configuration matches YAML_FILE
     #[clap(long, value_name = "YAML_FILE")]
     verify_configuration_file: Option<PathBuf>,
@@ -523,6 +527,7 @@ struct NetworkConfigOptions {
 }
 
 impl NetworkConfigOptions {
+    #[expect(clippy::too_many_lines)]
     fn into_config(
         self,
         network: Network,
@@ -577,7 +582,6 @@ impl NetworkConfigOptions {
         network_config.libp2p_private_key_file = libp2p_private_key_file;
         network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
         network_config.outbound_rate_limiter_config = Some(OutboundRateLimiterConfig::default());
-        network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
 
         if let Some(listen_address_ipv6) = listen_address_ipv6 {
             network_config.set_ipv4_ipv6_listening_addresses(
@@ -909,6 +913,7 @@ impl GrandineArgs {
             verify_capella_preset_file,
             verify_deneb_preset_file,
             verify_electra_preset_file,
+            verify_fulu_preset_file,
             verify_configuration_file,
             terminal_total_difficulty_override,
             terminal_block_hash_override,
@@ -1119,6 +1124,13 @@ impl GrandineArgs {
             &chain_config.preset_base.electra_preset(),
             verify_electra_preset_file,
             Phase::Electra,
+        )?;
+
+        verify_preset(
+            &chain_config,
+            &chain_config.preset_base.fulu_preset(),
+            verify_fulu_preset_file,
+            Phase::Fulu,
         )?;
 
         verify_config(&chain_config, verify_configuration_file)?;

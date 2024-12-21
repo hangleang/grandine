@@ -33,12 +33,12 @@ use crate::{
         consts::BytesPerFieldElement,
         primitives::{Blob, KzgCommitment},
     },
-    eip7594::Cell,
     electra::containers::{
         Attestation as ElectraAttestation, AttesterSlashing as ElectraAttesterSlashing,
         ConsolidationRequest, DepositRequest, PendingConsolidation, PendingDeposit,
         PendingPartialWithdrawal, WithdrawalRequest,
     },
+    fulu::primitives::Cell,
     phase0::{
         containers::{
             Attestation, AttesterSlashing, Deposit, ProposerSlashing, SignedVoluntaryExit,

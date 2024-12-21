@@ -264,6 +264,7 @@ pub async fn run_after_genesis<P: Preset>(
     )?;
 
     let received_blob_sidecars = Arc::new(DashMap::new());
+    let data_dumper = Arc::new(DataDumper::new(&controller.chain_config().config_name)?);
 
     let execution_service = ExecutionService::new(
         eth1_api.clone_arc(),
@@ -582,13 +583,13 @@ pub async fn run_after_genesis<P: Preset>(
         bls_to_execution_change_pool.clone_arc(),
         metrics.clone(),
         registry.as_mut(),
-        data_dumper,
+        data_dumper.clone_arc(),
     )
     .await?;
 
-    if chain_config.is_eip7594_fork_epoch_set() {
-        let sample_columns = network.network_globals().sampling_columns.clone();
-        controller.on_store_sample_columns(sample_columns);
+    if chain_config.is_peerdas_scheduled() {
+        let sampling_columns = &network.network_globals().sampling_columns;
+        controller.on_store_sampling_columns(sampling_columns);
     }
 
     let block_sync_service_channels = BlockSyncServiceChannels {
@@ -605,8 +606,6 @@ pub async fn run_after_genesis<P: Preset>(
         storage_config.sync_database(None, DatabaseMode::ReadWrite)?
     };
 
-    let data_dumper = Arc::new(DataDumper::new(&controller.chain_config().config_name)?);
-
     let mut block_sync_service = BlockSyncService::new(
         chain_config.clone_arc(),
         block_sync_database,
@@ -620,7 +619,7 @@ pub async fn run_after_genesis<P: Preset>(
         storage_config.storage_mode,
         network_config.target_peers,
         received_blob_sidecars,
-        data_dumper.clone_arc(),
+        data_dumper,
     )?;
 
     block_sync_service.try_to_spawn_back_sync_states_archiver()?;
