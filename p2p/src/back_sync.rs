@@ -27,8 +27,11 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    eip7594::{ColumnIndex, DataColumnIdentifier, DataColumnSidecar},
-    nonstandard::PayloadStatus,
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnSidecar},
+        primitives::ColumnIndex,
+    },
+    nonstandard::{PayloadStatus, Phase},
     phase0::{
         consts::GENESIS_SLOT,
         primitives::{Slot, H256},
@@ -313,7 +316,7 @@ impl<P: Preset> Batch<P> {
         let block = block.message();
 
         // TODO(feature/fulu): check phase instead, or remove it since already check at called
-        if !config.is_eip7594_fork(misc::compute_epoch_at_slot::<P>(block.slot())) {
+        if config.phase_at_slot::<P>(block.slot()) < Phase::Fulu {
             return Ok(vec![]);
         };
 
@@ -412,8 +415,7 @@ impl<P: Preset> Batch<P> {
                 );
 
                 // TODO(feature/fulu): check phase instead
-                if config.is_eip7594_fork(misc::compute_epoch_at_slot::<P>(block.message().slot()))
-                {
+                if config.phase_at_slot::<P>(block.message().slot()) >= Phase::Fulu {
                     let mut data_columns =
                         self.valid_data_column_sidecars_for(config, controller, block, parent)?;
 

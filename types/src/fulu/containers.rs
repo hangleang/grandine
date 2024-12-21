@@ -8,14 +8,18 @@ use crate::{
     capella::{consts::ExecutionPayloadIndex, containers::SignedBlsToExecutionChange},
     deneb::{
         containers::{ExecutionPayload, ExecutionPayloadHeader},
-        primitives::KzgCommitment,
+        primitives::{KzgCommitment, KzgProof},
     },
     electra::{
         consts::{CurrentSyncCommitteeIndex, FinalizedRootIndex, NextSyncCommitteeIndex},
         containers::{Attestation, AttesterSlashing, ExecutionRequests},
     },
+    fulu::primitives::{BlobCommitmentsInclusionProof, Cell, ColumnIndex, RowIndex},
     phase0::{
-        containers::{BeaconBlockHeader, Deposit, Eth1Data, ProposerSlashing, SignedVoluntaryExit},
+        containers::{
+            BeaconBlockHeader, Deposit, Eth1Data, ProposerSlashing, SignedBeaconBlockHeader,
+            SignedVoluntaryExit,
+        },
         primitives::{Slot, ValidatorIndex, H256},
     },
     preset::Preset,
@@ -144,4 +148,35 @@ pub struct SignedBeaconBlock<P: Preset> {
 pub struct SignedBlindedBeaconBlock<P: Preset> {
     pub message: BlindedBeaconBlock<P>,
     pub signature: SignatureBytes,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize, Serialize, Ssz)]
+#[serde(deny_unknown_fields)]
+pub struct DataColumnIdentifier {
+    pub block_root: H256,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub index: ColumnIndex,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize, Ssz)]
+#[serde(bound = "", deny_unknown_fields)]
+pub struct DataColumnSidecar<P: Preset> {
+    #[serde(with = "serde_utils::string_or_native")]
+    pub index: ColumnIndex,
+    pub column: ContiguousList<Cell, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_commitments: ContiguousList<KzgCommitment, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
+    pub signed_block_header: SignedBeaconBlockHeader,
+    pub kzg_commitments_inclusion_proof: BlobCommitmentsInclusionProof<P>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Debug, Deserialize, Serialize, Ssz)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixEntry {
+    pub cell: Cell,
+    pub kzg_proof: KzgProof,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub column_index: ColumnIndex,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub row_index: RowIndex,
 }

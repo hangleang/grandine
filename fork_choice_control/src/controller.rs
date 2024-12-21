@@ -39,7 +39,7 @@ use types::{
     },
     config::Config as ChainConfig,
     deneb::containers::BlobSidecar,
-    eip7594::{ColumnIndex, DataColumnSidecar},
+    fulu::{containers::DataColumnSidecar, primitives::ColumnIndex},
     nonstandard::ValidationOutcome,
     phase0::primitives::{ExecutionBlockHash, Slot, SubnetId, H256},
     preset::Preset,
@@ -192,8 +192,8 @@ where
         self.storage().config()
     }
 
-    pub fn on_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
-        self.spawn_store_sample_columns(sample_columns)
+    pub fn on_store_sampling_columns(&self, sampling_columns: &[ColumnIndex]) {
+        self.spawn_store_sampling_columns(sampling_columns)
     }
 
     // This should be called at the start of every tick.
@@ -451,6 +451,17 @@ where
         self.spawn_blob_sidecar_task(blob_sidecar, true, BlobSidecarOrigin::ExecutionLayer)
     }
 
+    pub fn on_reconstruct_data_column_sidecar(
+        &self,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    ) {
+        self.spawn_data_column_sidecar_task(
+            data_column_sidecar,
+            true,
+            DataColumnSidecarOrigin::Reconstruction,
+        )
+    }
+
     pub fn on_gossip_blob_sidecar(
         &self,
         blob_sidecar: Arc<BlobSidecar<P>>,
@@ -643,10 +654,10 @@ where
         })
     }
 
-    fn spawn_store_sample_columns(&self, sample_columns: Vec<ColumnIndex>) {
-        if !self.owned_store_snapshot().has_sample_columns_stored() {
-            MutatorMessage::StoreSampleColumns {
-                sample_columns: HashSet::from_iter(sample_columns),
+    fn spawn_store_sampling_columns(&self, sampling_columns: &[ColumnIndex]) {
+        if !self.owned_store_snapshot().has_sampling_columns_stored() {
+            MutatorMessage::StoreSamplingColumns {
+                sampling_columns: sampling_columns.iter().copied().collect::<HashSet<_>>(),
             }
             .send(&self.owned_mutator_tx());
         }

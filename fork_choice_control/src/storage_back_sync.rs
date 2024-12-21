@@ -13,7 +13,7 @@ use transition_functions::combined;
 use types::{
     combined::SignedBeaconBlock,
     deneb::containers::BlobSidecar,
-    eip7594::DataColumnSidecar,
+    fulu::containers::DataColumnSidecar,
     nonstandard::{FinalizedCheckpoint, WithOrigin},
     phase0::primitives::Slot,
     preset::Preset,

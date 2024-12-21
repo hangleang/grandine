@@ -16,7 +16,7 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    eip7594::{DataColumnIdentifier, DataColumnSidecar},
+    fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
     phase0::primitives::ValidatorIndex,
     preset::Preset,
 };

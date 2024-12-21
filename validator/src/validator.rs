@@ -927,12 +927,11 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
         if let Some(blobs) = block_blobs {
             if !blobs.is_empty() {
-                if self.chain_config.is_eip7594_fork(epoch) {
+                if self.chain_config.phase_at_slot::<P>(slot_head.slot()) >= Phase::Fulu {
                     let cells_and_kzg_proofs =
-                        eip_7594::convert_blobs_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
-
+                        eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
                     for data_column_sidecar in
-                        eip_7594::get_data_column_sidecars(&block, cells_and_kzg_proofs)?
+                        eip_7594::construct_data_column_sidecars(&block, &cells_and_kzg_proofs)?
                     {
                         let data_column_sidecar = Arc::new(data_column_sidecar);
 
@@ -954,7 +953,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 } else {
                     for blob_sidecar in misc::construct_blob_sidecars(
                         &block,
-                        blobs.clone().into_iter(),
+                        blobs.into_iter(),
                         block_proofs.unwrap_or_default().into_iter(),
                     )? {
                         let blob_sidecar = Arc::new(blob_sidecar);
@@ -1054,7 +1053,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 ..
             } = own_attestation;
 
-            let committee_index = misc::committee_index(&attestation);
+            let committee_index = misc::committee_index(attestation);
 
             debug!(
                 "validator {} of committee {} ({:?}) attesting in slot {}: {:?}",
@@ -1628,7 +1627,6 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         })
     }
 
-    // TODO: filter out duplicate messages
     async fn own_sync_committee_messages(
         &self,
         slot_head: &SlotHead<P>,
@@ -1662,7 +1660,6 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             .pipe(group_into_btreemap))
     }
 
-    // TODO: filter out duplicate messages
     async fn own_contributions_and_proofs(
         &self,
         slot_head: &SlotHead<P>,
@@ -1737,12 +1734,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
     }
 
     fn own_sync_committee_members(&self) -> impl Iterator<Item = &SyncCommitteeMember> {
-        // TODO: filter out duplicate members before setting into `own_sync_committee_members`.
-        self.own_sync_committee_members
-            .get()
-            .into_iter()
-            .flatten()
-            .unique_by(|m| &m.validator_index)
+        self.own_sync_committee_members.get().into_iter().flatten()
     }
 
     async fn own_subcommittee_aggregators(
