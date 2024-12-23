@@ -18,6 +18,7 @@ jobs:
       with:
         submodules: true
         lfs: true
+        bins: cargo-audit
     # There should be no need to install Rustup or a Rust toolchain explicitly.
     # The `ubuntu-22.04` image already includes Rustup:
     # <https://github.com/actions/runner-images/blob/ubuntu22/20240401.4/images/ubuntu/Ubuntu2204-Readme.md#rust-tools>
