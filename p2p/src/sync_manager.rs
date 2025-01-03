@@ -344,9 +344,14 @@ impl SyncManager {
                 let data_column_serve_range_slot =
                     misc::data_column_serve_range_slot::<P>(config, current_slot);
                 if data_column_serve_range_slot < max_slot {
-                    match self
-                        .map_peer_custody_columns(&self.network_globals.sampling_columns, None)
-                    {
+                    let columns = self
+                        .network_globals()
+                        .sampling_columns
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    match self.map_peer_custody_columns(&columns, None) {
                         Ok(peer_custody_columns_mapping) => {
                             for (peer_id, columns) in peer_custody_columns_mapping {
                                 sync_batches.push(SyncBatch {
@@ -368,7 +373,6 @@ impl SyncManager {
                                 ),
                             );
 
-                            let columns = self.network_globals().sampling_columns.clone();
                             sync_batches.push(SyncBatch {
                                 target: SyncTarget::DataColumnSidecar(columns),
                                 direction: SyncDirection::Forward,
