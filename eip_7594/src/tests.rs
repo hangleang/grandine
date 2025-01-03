@@ -41,10 +41,13 @@ fn run_get_custody_groups_case<P: Preset>(case: Case) {
     } = case.yaml("meta");
 
     let config = P::default_config().start_and_stay_in(Phase::Fulu);
-    let custody_groups = get_custody_groups(node_id, custody_group_count, &config)
+    let mut raw_node_id = [0u8; 32];
+    node_id.into_raw().to_big_endian(&mut raw_node_id);
+
+    let custody_groups = get_custody_groups(raw_node_id, custody_group_count, &config)
         .expect("custody groups must be valid");
 
-    assert_eq!(custody_groups.collect::<Vec<_>>(), result);
+    assert_eq!(custody_groups, result);
 }
 
 #[derive(Deserialize)]

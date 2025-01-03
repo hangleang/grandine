@@ -1,8 +1,11 @@
+use std::collections::{BTreeSet, HashSet};
+
 use anyhow::{ensure, Result};
 use c_kzg::{
     Blob as CKzgBlob, Bytes48, Cell as CKzgCell, KzgProof as CKzgProof, CELLS_PER_EXT_BLOB,
 };
 use helper_functions::{misc, predicates::is_valid_merkle_branch};
+use itertools::Itertools as _;
 use kzg as _;
 use num_traits::One as _;
 use sha2::{Digest as _, Sha256};
@@ -18,7 +21,7 @@ use types::{
         containers::{DataColumnSidecar, MatrixEntry},
         primitives::{Cell, ColumnIndex, CustodyIndex},
     },
-    phase0::primitives::NodeId,
+    phase0::primitives::{NodeId, SubnetId},
     preset::Preset,
     traits::SignedBeaconBlock as _,
 };
@@ -36,10 +39,10 @@ mod tests;
 use prometheus_metrics::METRICS;
 
 pub fn get_custody_groups(
-    node_id: NodeId,
+    raw_node_id: [u8; 32],
     custody_group_count: u64,
     config: &Config,
-) -> Result<impl Iterator<Item = CustodyIndex>> {
+) -> Result<Vec<CustodyIndex>> {
     let number_of_custody_groups = config.number_of_custody_groups;
     ensure!(
         custody_group_count <= number_of_custody_groups,
@@ -49,12 +52,12 @@ pub fn get_custody_groups(
         },
     );
 
-    let mut custody_groups = vec![];
-    let mut current_id = node_id;
+    let mut current_id = NodeId::from_be_bytes(raw_node_id);
 
+    let mut custody_groups = BTreeSet::new();
     while (custody_groups.len() as u64) < custody_group_count {
         let mut hasher = Sha256::new();
-        let mut bytes: [u8; 32] = [0; 32];
+        let mut bytes = [0u8; 32];
 
         current_id.into_raw().to_little_endian(&mut bytes);
 
@@ -66,21 +69,20 @@ pub fn get_custody_groups(
         ];
 
         let output_prefix_u64 = u64::from_le_bytes(output_prefix);
-        let custody_group = output_prefix_u64 % number_of_custody_groups;
-
-        if !custody_groups.contains(&custody_group) {
-            custody_groups.push(custody_group);
-        }
+        let custody_group = output_prefix_u64
+            .checked_rem(number_of_custody_groups)
+            .expect("number of custody groups must not be zero");
+        custody_groups.insert(custody_group);
 
         if current_id == Uint256::MAX {
+            // > Overflow prevention
             current_id = Uint256::ZERO;
+        } else {
+            current_id = current_id + Uint256::one();
         }
-
-        current_id = current_id + Uint256::one();
     }
 
-    custody_groups.sort_unstable();
-    Ok(custody_groups.into_iter())
+    Ok(custody_groups.into_iter().collect())
 }
 
 pub fn compute_columns_for_custody_group(
@@ -108,12 +110,30 @@ pub fn compute_columns_for_custody_group(
     Ok(columns.into_iter())
 }
 
-pub fn compute_custody_requirement_groups(
-    node_id: NodeId,
+pub fn compute_subnets_from_custody_group(
+    custody_group: CustodyIndex,
     config: &Config,
-) -> impl Iterator<Item = CustodyIndex> {
-    get_custody_groups(node_id, config.custody_requirement, config)
-        .expect("compute must be success with custody requirement")
+) -> Result<impl Iterator<Item = SubnetId> + '_> {
+    let subnets = compute_columns_for_custody_group(custody_group, config)?
+        .map(|column_index| misc::compute_subnet_for_data_column_sidecar(config, column_index))
+        .unique();
+
+    Ok(subnets)
+}
+
+pub fn compute_subnets_for_node(
+    raw_node_id: [u8; 32],
+    custody_group_count: u64,
+    config: &Config,
+) -> Result<HashSet<SubnetId>> {
+    let mut subnets = HashSet::new();
+    for custody_group in get_custody_groups(raw_node_id, custody_group_count, config)? {
+        let custody_group_subnets = compute_subnets_from_custody_group(custody_group, config)?;
+
+        subnets.extend(custody_group_subnets);
+    }
+
+    Ok(subnets)
 }
 
 /// Verify if the data column sidecar is valid.
