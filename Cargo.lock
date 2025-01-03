@@ -2360,6 +2360,7 @@ dependencies = [
  "c-kzg",
  "duplicate",
  "helper_functions",
+ "itertools 0.14.0",
  "kzg",
  "num-traits",
  "prometheus_metrics",

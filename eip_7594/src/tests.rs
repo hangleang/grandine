@@ -1,5 +1,7 @@
 #![expect(clippy::manual_let_else)]
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use c_kzg::{Blob, Bytes48, Cell, KzgProof};
 use duplicate::duplicate_item;
@@ -20,7 +22,7 @@ use crate::{compute_columns_for_custody_group, get_custody_groups, trusted_setup
 struct GetCustodyGroupsMeta {
     node_id: NodeId,
     custody_group_count: u64,
-    result: Vec<CustodyIndex>,
+    result: HashSet<CustodyIndex>,
 }
 
 #[duplicate_item(
@@ -41,10 +43,13 @@ fn run_get_custody_groups_case<P: Preset>(case: Case) {
     } = case.yaml("meta");
 
     let config = P::default_config().start_and_stay_in(Phase::Fulu);
-    let custody_groups = get_custody_groups(node_id, custody_group_count, &config)
+    let mut raw_node_id = [0u8; 32];
+    node_id.into_raw().to_big_endian(&mut raw_node_id);
+
+    let custody_groups = get_custody_groups(raw_node_id, custody_group_count, &config)
         .expect("custody groups must be valid");
 
-    assert_eq!(custody_groups.collect::<Vec<_>>(), result);
+    assert_eq!(custody_groups, result);
 }
 
 #[derive(Deserialize)]
