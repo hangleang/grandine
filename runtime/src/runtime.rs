@@ -580,8 +580,13 @@ pub async fn run_after_genesis<P: Preset>(
     .await?;
 
     if chain_config.is_peerdas_scheduled() {
-        let sampling_columns = &network.network_globals().sampling_columns;
-        controller.on_store_sampling_columns(sampling_columns);
+        let sampling_columns = network
+            .network_globals()
+            .sampling_columns
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        controller.on_store_sampling_columns(&sampling_columns);
     }
 
     let block_sync_service_channels = BlockSyncServiceChannels {

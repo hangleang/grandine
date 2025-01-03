@@ -849,6 +849,11 @@ impl Config {
         }
     }
 
+    #[must_use]
+    pub fn sampling_size(&self, custody_group_count: u64) -> u64 {
+        core::cmp::max(custody_group_count, self.samples_per_slot)
+    }
+
     fn fork_slots<P: Preset>(&self) -> impl Iterator<Item = (Phase, Toption<Slot>)> + '_ {
         enum_iterator::all().map(|phase| (phase, self.fork_slot::<P>(phase)))
     }

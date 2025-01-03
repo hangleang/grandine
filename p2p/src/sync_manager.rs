@@ -223,7 +223,7 @@ impl SyncManager {
                     count: batch.count,
                     retry_count: batch.retry_count + 1,
                     response_received: false,
-                    data_columns: batch.data_columns.clone(),
+                    data_columns: batch.data_columns,
                 };
 
                 match batch.target {
@@ -316,6 +316,13 @@ impl SyncManager {
                             start_slot = data_availability_serve_range_slot;
                         };
 
+                        let columns = self
+                            .network_globals
+                            .sampling_columns
+                            .clone()
+                            .into_iter()
+                            .collect::<Vec<_>>();
+
                         // TDOD(feature/fulu): check phase instead
                         let batch = if config.phase_at_slot::<P>(start_slot) >= Phase::Fulu {
                             SyncBatch {
@@ -327,11 +334,7 @@ impl SyncManager {
                                 response_received: false,
                                 retry_count: 0,
                                 // TODO(feature/fulu): handle error case
-                                data_columns: ContiguousList::try_from(
-                                    self.network_globals.sampling_columns.clone(),
-                                )
-                                .map(Arc::new)
-                                .ok(),
+                                data_columns: ContiguousList::try_from(columns).map(Arc::new).ok(),
                             }
                         } else {
                             SyncBatch {
@@ -516,9 +519,14 @@ impl SyncManager {
                 let data_column_serve_range_slot =
                     misc::data_column_serve_range_slot::<P>(config, current_slot);
                 if data_column_serve_range_slot < max_slot {
-                    match self
-                        .map_peer_custody_columns(&self.network_globals.sampling_columns, None)
-                    {
+                    let sampling_columns = self
+                        .network_globals
+                        .sampling_columns
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    match self.map_peer_custody_columns(&sampling_columns, None) {
                         Ok(peer_custody_columns_mapping) => {
                             for (peer_id, columns) in peer_custody_columns_mapping {
                                 sync_batches.push(SyncBatch {
@@ -546,7 +554,6 @@ impl SyncManager {
                                 ),
                             );
 
-                            let columns = self.network_globals.sampling_columns.clone();
                             sync_batches.push(SyncBatch {
                                 target: SyncTarget::DataColumnSidecar,
                                 direction: SyncDirection::Forward,
@@ -555,7 +562,9 @@ impl SyncManager {
                                 count,
                                 response_received: false,
                                 retry_count: 0,
-                                data_columns: ContiguousList::try_from(columns).map(Arc::new).ok(),
+                                data_columns: ContiguousList::try_from(sampling_columns)
+                                    .map(Arc::new)
+                                    .ok(),
                             });
                         }
                     }
