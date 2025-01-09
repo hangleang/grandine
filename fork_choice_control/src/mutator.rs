@@ -46,12 +46,10 @@ use num_traits::identities::Zero as _;
 use prometheus_metrics::Metrics;
 use ssz::SszHash as _;
 use std_ext::ArcExt as _;
-use typenum::Unsigned as _;
 use types::{
     combined::{BeaconState, ExecutionPayloadParams, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{
-        consts::NumberOfColumns,
         containers::{DataColumnIdentifier, DataColumnSidecar, MatrixEntry},
         primitives::ColumnIndex,
     },
@@ -587,7 +585,8 @@ where
                     let missing_column_indices =
                         self.store.indices_of_missing_data_columns(&parent.block);
 
-                    if missing_column_indices.len() * 2 < NumberOfColumns::USIZE
+                    let number_of_columns = self.store.chain_config().number_of_columns();
+                    if missing_column_indices.len() * 2 < number_of_columns
                         || !self.store.is_forward_synced()
                     {
                         let body = parent
@@ -604,7 +603,7 @@ where
 
                             // TODO(feature/fulu): random delay reconstruction as stated in the [specs]
                             // (https://github.com/ethereum/consensus-specs/blob/8696fbf75387fb37a32fc08a6b934653198c6c0c/specs/fulu/das-core.md?plain=1#L257)
-                            if available_columns.len() > NumberOfColumns::USIZE / 2
+                            if available_columns.len() > number_of_columns / 2
                                 && !self
                                     .store
                                     .has_reconstructed_data_column_sidecars(parent.block_root)
@@ -1532,15 +1531,18 @@ where
         blob_count: usize,
         full_matrix: Vec<MatrixEntry>,
     ) -> Result<()> {
+        let config = self.store.chain_config();
         let chain_link = self.store.chain_link(block_root).expect(
             "block must be available in the store during data column sidecars reconstruction",
         );
 
         let cells_and_kzg_proofs =
             eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-        for data_column_sidecar in
-            eip_7594::construct_data_column_sidecars(&chain_link.block, &cells_and_kzg_proofs)?
-        {
+        for data_column_sidecar in eip_7594::construct_data_column_sidecars(
+            &chain_link.block,
+            &cells_and_kzg_proofs,
+            config,
+        )? {
             let data_column_sidecar = Arc::new(data_column_sidecar);
             let data_column_identifier: DataColumnIdentifier = data_column_sidecar.as_ref().into();
 
