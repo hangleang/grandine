@@ -782,7 +782,21 @@ impl Config {
 
     #[must_use]
     pub fn sampling_size(&self, custody_group_count: u64) -> u64 {
-        core::cmp::max(custody_group_count, self.samples_per_slot)
+        core::cmp::max(
+            custody_group_count.saturating_mul(self.columns_per_group()),
+            self.samples_per_slot,
+        )
+    }
+
+    #[must_use]
+    pub const fn columns_per_group(&self) -> u64 {
+        self.number_of_columns
+            .saturating_div(self.number_of_custody_groups)
+    }
+
+    #[must_use]
+    pub fn number_of_columns(&self) -> usize {
+        usize::try_from(self.number_of_columns).expect("should be able to parse number_of_columns")
     }
 
     fn fork_slots<P: Preset>(&self) -> impl Iterator<Item = (Phase, Toption<Slot>)> + '_ {

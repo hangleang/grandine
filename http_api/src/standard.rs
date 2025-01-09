@@ -987,8 +987,11 @@ pub async fn publish_block<P: Preset, W: Wait>(
     if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
         let cells_and_kzg_proofs =
             eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
-        let data_column_sidecars =
-            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
+        let data_column_sidecars = eip_7594::construct_data_column_sidecars(
+            &signed_beacon_block,
+            &cells_and_kzg_proofs,
+            controller.chain_config(),
+        )?;
 
         publish_signed_block_with_data_column_sidecar(
             Arc::new(signed_beacon_block),
@@ -1046,8 +1049,11 @@ pub async fn publish_blinded_block<P: Preset, W: Wait>(
         let cells_and_kzg_proofs = eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
             blobs.unwrap_or_default().into_iter(),
         )?;
-        let data_column_sidecars =
-            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
+        let data_column_sidecars = eip_7594::construct_data_column_sidecars(
+            &signed_beacon_block,
+            &cells_and_kzg_proofs,
+            controller.chain_config(),
+        )?;
 
         publish_signed_block_with_data_column_sidecar(
             signed_beacon_block,
@@ -1129,8 +1135,11 @@ pub async fn publish_block_v2<P: Preset, W: Wait>(
     if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
         let cells_and_kzg_proofs =
             eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
-        let data_column_sidecars =
-            eip_7594::construct_data_column_sidecars(&signed_beacon_block, &cells_and_kzg_proofs)?;
+        let data_column_sidecars = eip_7594::construct_data_column_sidecars(
+            &signed_beacon_block,
+            &cells_and_kzg_proofs,
+            controller.chain_config(),
+        )?;
 
         publish_signed_block_v2_with_data_column_sidecar(
             Arc::new(signed_beacon_block),

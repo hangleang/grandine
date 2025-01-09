@@ -2061,7 +2061,6 @@ dependencies = [
  "test-generator",
  "thiserror 1.0.69",
  "try_from_iterator",
- "typenum",
  "types",
 ]
 
@@ -2661,7 +2660,6 @@ dependencies = [
  "thiserror 1.0.69",
  "transition_functions",
  "tynm",
- "typenum",
  "types",
  "unwrap_none",
 ]
@@ -2698,7 +2696,6 @@ dependencies = [
  "thiserror 1.0.69",
  "transition_functions",
  "tynm",
- "typenum",
  "types",
  "unwrap_none",
 ]
