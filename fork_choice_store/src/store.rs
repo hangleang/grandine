@@ -47,7 +47,6 @@ use types::{
     },
     electra::containers::IndexedAttestation as ElectraIndexedAttestation,
     fulu::{
-        consts::NumberOfColumns,
         containers::{DataColumnIdentifier, DataColumnSidecar},
         primitives::ColumnIndex,
     },
@@ -1157,7 +1156,9 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             if state.is_post_fulu() {
                 let missing_indices = self.indices_of_missing_data_columns(&parent.block);
 
-                if missing_indices.len() * 2 >= NumberOfColumns::USIZE && self.is_forward_synced() {
+                if missing_indices.len() * 2 >= self.chain_config.number_of_columns()
+                    && self.is_forward_synced()
+                {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc(), state));
                 }
             } else {
@@ -2014,7 +2015,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
 
         // [REJECT] The sidecar's index is consistent with NUMBER_OF_COLUMNS -- i.e. sidecar.index < NUMBER_OF_COLUMNS.
         ensure!(
-            verify_data_column_sidecar(&data_column_sidecar),
+            verify_data_column_sidecar(&data_column_sidecar, &self.chain_config),
             Error::DataColumnSidecarInvalid {
                 data_column_sidecar
             },
@@ -3689,7 +3690,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     }
 
     pub fn is_supernode(&self) -> bool {
-        self.sampling_columns.len() == NumberOfColumns::USIZE
+        self.sampling_columns.len() == self.chain_config.number_of_columns()
     }
 
     pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
@@ -3697,7 +3698,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     }
 
     pub fn available_columns_at_block(&self, block_root: H256) -> Vec<Arc<DataColumnSidecar<P>>> {
-        (0..NumberOfColumns::U64)
+        (0..self.chain_config.number_of_columns)
             .filter_map(|index| {
                 self.data_column_cache
                     .get(DataColumnIdentifier { block_root, index })

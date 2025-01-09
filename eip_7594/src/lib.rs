@@ -11,13 +11,11 @@ use num_traits::One as _;
 use sha2::{Digest as _, Sha256};
 use ssz::{ByteVector, ContiguousList, ContiguousVector, SszHash as _, Uint256};
 use try_from_iterator::TryFromIterator as _;
-use typenum::Unsigned as _;
 use types::{
     combined::SignedBeaconBlock,
     config::Config,
     deneb::primitives::{Blob, KzgProof},
     fulu::{
-        consts::NumberOfColumns,
         containers::{DataColumnSidecar, MatrixEntry},
         primitives::{Cell, ColumnIndex, CustodyIndex},
     },
@@ -34,6 +32,10 @@ mod trusted_setup;
 
 #[cfg(test)]
 mod tests;
+
+type ColumnCells = [Cell; CELLS_PER_EXT_BLOB];
+type ColumnProofs = [KzgProof; CELLS_PER_EXT_BLOB];
+type CellsAndKzgProofs = Vec<(ColumnCells, ColumnProofs)>;
 
 #[cfg(feature = "metrics")]
 use prometheus_metrics::METRICS;
@@ -98,9 +100,8 @@ pub fn compute_columns_for_custody_group(
         },
     );
 
-    let columns_per_custody_group = NumberOfColumns::U64 / number_of_custody_groups;
     let mut columns = Vec::new();
-    for i in 0..columns_per_custody_group {
+    for i in 0..config.columns_per_group() {
         columns.push(ColumnIndex::from(
             number_of_custody_groups * i + custody_group,
         ));
@@ -137,7 +138,10 @@ pub fn compute_subnets_for_node(
 }
 
 /// Verify if the data column sidecar is valid.
-pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> bool {
+pub fn verify_data_column_sidecar<P: Preset>(
+    data_column_sidecar: &DataColumnSidecar<P>,
+    config: &Config,
+) -> bool {
     let DataColumnSidecar {
         index,
         column,
@@ -147,7 +151,7 @@ pub fn verify_data_column_sidecar<P: Preset>(data_column_sidecar: &DataColumnSid
     } = data_column_sidecar;
 
     // The sidecar index must be within the valid range
-    if *index >= NumberOfColumns::U64 {
+    if *index >= config.number_of_columns {
         return false;
     }
 
@@ -249,7 +253,7 @@ pub fn compute_matrix(blobs: &[CKzgBlob]) -> Result<Vec<MatrixEntry>> {
         let (cells, proofs) = CKzgCell::compute_cells_and_kzg_proofs(blob, settings())?;
         for (cell_index, (cell, proof)) in cells.into_iter().zip(proofs.into_iter()).enumerate() {
             matrix.push(MatrixEntry {
-                cell: try_convert_ckzg_cell_to_cell(&cell)?,
+                cell: try_convert_to_cell(&cell)?,
                 kzg_proof: KzgProof::from(proof.to_bytes().into_inner()),
                 row_index: blob_index as u64,
                 column_index: cell_index as u64,
@@ -296,7 +300,7 @@ pub fn recover_matrix(
             .enumerate()
         {
             matrix.push(MatrixEntry {
-                cell: try_convert_ckzg_cell_to_cell(&cell)?,
+                cell: try_convert_to_cell(&cell)?,
                 kzg_proof: KzgProof::from(proof.to_bytes().into_inner()),
                 row_index: blob_index as u64,
                 column_index: cell_index as u64,
@@ -307,10 +311,10 @@ pub fn recover_matrix(
     Ok(matrix)
 }
 
-// TODO(peerdas-fulu): refactor params
 pub fn construct_data_column_sidecars<P: Preset>(
     signed_block: &SignedBeaconBlock<P>,
-    cells_and_kzg_proofs: &[([Cell; CELLS_PER_EXT_BLOB], [KzgProof; CELLS_PER_EXT_BLOB])],
+    cells_and_kzg_proofs: &CellsAndKzgProofs,
+    config: &Config,
 ) -> Result<Vec<DataColumnSidecar<P>>> {
     let signed_block_header = signed_block.to_header();
 
@@ -334,7 +338,7 @@ pub fn construct_data_column_sidecars<P: Preset>(
         let kzg_commitments_inclusion_proof =
             misc::kzg_commitments_inclusion_proof(post_electra_beacon_block_body);
 
-        for column_index in 0..NumberOfColumns::USIZE {
+        for column_index in 0..config.number_of_columns() {
             let column = ContiguousList::try_from_iter(
                 (0..blob_count)
                     .map(|row_index| cells_and_kzg_proofs[row_index].0[column_index].clone()),
@@ -359,7 +363,7 @@ pub fn construct_data_column_sidecars<P: Preset>(
 
 pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
     blobs: impl Iterator<Item = Blob<P>>,
-) -> Result<Vec<([Cell; CELLS_PER_EXT_BLOB], [KzgProof; CELLS_PER_EXT_BLOB])>> {
+) -> Result<CellsAndKzgProofs> {
     let cells_and_kzg_proofs = blobs
         .map(|blob| {
             let c_kzg_blob = CKzgBlob::from_bytes(blob.as_bytes())?;
@@ -367,51 +371,46 @@ pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut result: Vec<([Cell; CELLS_PER_EXT_BLOB], [KzgProof; CELLS_PER_EXT_BLOB])> = vec![];
-    for (column_cells, column_proofs) in cells_and_kzg_proofs {
-        let cells = column_cells
+    let mut result = vec![];
+    for (cells, proofs) in cells_and_kzg_proofs {
+        let cells = cells
             .iter()
-            .map(try_convert_ckzg_cell_to_cell)
-            .collect::<Result<Vec<Cell>>>()?;
+            .map(try_convert_to_cell)
+            .collect::<Result<Vec<_>>>()?;
+        let column_cells = cells
+            .try_into()
+            .expect("column cells should have length of CELLS_PER_EXT_BLOB");
 
-        let proofs = column_proofs
+        let proofs = proofs
             .iter()
             .map(|proof| KzgProof::from(proof.to_bytes().into_inner()))
-            .collect::<Vec<KzgProof>>();
+            .collect::<Vec<_>>();
+        let column_proofs = proofs
+            .try_into()
+            .expect("column proofs should have length of CELLS_PER_EXT_BLOB");
 
-        let column: [Cell; CELLS_PER_EXT_BLOB] = cells
-            .try_into()
-            .expect("cells should not be more than number of columns");
-        let kzg_proofs: [KzgProof; CELLS_PER_EXT_BLOB] = proofs
-            .try_into()
-            .expect("kzg_proofs should not be more than number of columns");
-        result.push((column, kzg_proofs));
+        result.push((column_cells, column_proofs));
     }
 
     Ok(result)
 }
 
-fn try_convert_ckzg_cell_to_cell(cell: &CKzgCell) -> Result<Cell> {
-    let bytes = cell.to_bytes();
-
-    ContiguousVector::try_from_iter(bytes)
+fn try_convert_to_cell(cell: &CKzgCell) -> Result<Cell> {
+    ContiguousVector::try_from_iter(cell.to_bytes())
         .map(ByteVector::from)
-        .map(Box::new)
+        .map(Cell::from)
         .map_err(Into::into)
 }
 
 pub fn construct_cells_and_kzg_proofs(
     full_matrix: Vec<MatrixEntry>,
     blob_count: usize,
-) -> Result<Vec<([Cell; CELLS_PER_EXT_BLOB], [KzgProof; CELLS_PER_EXT_BLOB])>> {
+) -> Result<CellsAndKzgProofs> {
     let default_cell = Cell::default();
-    let mut cells_and_kzg_proofs: Vec<(
-        [Cell; NumberOfColumns::USIZE],
-        [KzgProof; NumberOfColumns::USIZE],
-    )> = vec![
+    let mut cells_and_kzg_proofs = vec![
         (
             core::array::from_fn(|_| default_cell.clone()),
-            [KzgProof::repeat_byte(u8::MAX); NumberOfColumns::USIZE],
+            [KzgProof::zero(); CELLS_PER_EXT_BLOB],
         );
         blob_count
     ];
