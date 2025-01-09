@@ -918,9 +918,11 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 if self.chain_config.phase_at_slot::<P>(slot_head.slot()) >= Phase::Fulu {
                     let cells_and_kzg_proofs =
                         eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
-                    for data_column_sidecar in
-                        eip_7594::construct_data_column_sidecars(&block, &cells_and_kzg_proofs)?
-                    {
+                    for data_column_sidecar in eip_7594::construct_data_column_sidecars(
+                        &block,
+                        &cells_and_kzg_proofs,
+                        &self.chain_config,
+                    )? {
                         let data_column_sidecar = Arc::new(data_column_sidecar);
 
                         if self

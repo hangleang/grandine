@@ -12,14 +12,12 @@ use fork_choice_store::{
 use helper_functions::misc;
 use itertools::Itertools as _;
 use serde::Serialize;
-use ssz::ContiguousList;
 use std_ext::ArcExt;
 use thiserror::Error;
 use types::{
     combined::{BeaconState, SignedAggregateAndProof, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{
-        consts::NumberOfColumns,
         containers::{DataColumnIdentifier, DataColumnSidecar},
         primitives::ColumnIndex,
     },
@@ -511,7 +509,7 @@ where
     pub fn data_column_sidecars_by_range(
         &self,
         range: Range<Slot>,
-        columns: &ContiguousList<ColumnIndex, NumberOfColumns>,
+        columns: &[ColumnIndex],
         max_request_data_column_sidecars: usize,
     ) -> Result<Vec<Arc<DataColumnSidecar<P>>>> {
         let canonical_chain_blocks = self.blocks_by_range(range)?;
@@ -520,8 +518,8 @@ where
             .iter()
             .filter_map(|BlockWithRoot { block, root }| {
                 block.message().body().post_deneb().map(|_| {
-                    columns.iter().map(|index| DataColumnIdentifier {
-                        index: *index,
+                    columns.iter().copied().map(|index| DataColumnIdentifier {
+                        index,
                         block_root: *root,
                     })
                 })
