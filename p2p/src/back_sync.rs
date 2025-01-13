@@ -31,7 +31,7 @@ use types::{
         containers::{DataColumnIdentifier, DataColumnSidecar},
         primitives::ColumnIndex,
     },
-    nonstandard::{PayloadStatus, Phase},
+    nonstandard::PayloadStatus,
     phase0::{
         consts::GENESIS_SLOT,
         primitives::{Slot, H256},
@@ -315,8 +315,10 @@ impl<P: Preset> Batch<P> {
     ) -> Result<Vec<Arc<DataColumnSidecar<P>>>> {
         let block = block.message();
 
-        // TODO(feature/fulu): check phase instead, or remove it since already check at called
-        if config.phase_at_slot::<P>(block.slot()) < Phase::Fulu {
+        if !config
+            .phase_at_slot::<P>(block.slot())
+            .is_peerdas_activated()
+        {
             return Ok(vec![]);
         };
 
@@ -414,8 +416,10 @@ impl<P: Preset> Batch<P> {
                     },
                 );
 
-                // TODO(feature/fulu): check phase instead
-                if config.phase_at_slot::<P>(block.message().slot()) >= Phase::Fulu {
+                if config
+                    .phase_at_slot::<P>(block.message().slot())
+                    .is_peerdas_activated()
+                {
                     let mut data_columns =
                         self.valid_data_column_sidecars_for(config, controller, block, parent)?;
 

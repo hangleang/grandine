@@ -31,7 +31,6 @@ use types::{
     config::Config,
     deneb::containers::BlobIdentifier,
     fulu::containers::DataColumnIdentifier,
-    nonstandard::Phase,
     phase0::primitives::{Slot, H256},
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -622,7 +621,7 @@ impl<P: Preset> BlockSyncService<P> {
         //         match target {
         //             SyncTarget::DataColumnSidecar(ref columns) => match self
         //                 .sync_manager
-        //                 .map_peer_custody_columns(columns, Some(peer_id))
+        //                 .map_peer_custody_columns(columns, None)
         //             {
         //                 Ok(mapping) => Some(mapping
         //                     .into_iter()
@@ -815,12 +814,11 @@ impl<P: Preset> BlockSyncService<P> {
                 )?
             }
             SyncDirection::Back => {
-                // TODO(feature/fulu): check phase instead
                 let data_availability_serve_range_slot = if self
                     .controller
                     .chain_config()
                     .phase_at_slot::<P>(self.slot)
-                    >= Phase::Fulu
+                    .is_peerdas_activated()
                 {
                     misc::data_column_serve_range_slot::<P>(
                         self.controller.chain_config(),
@@ -1019,7 +1017,7 @@ impl<P: Preset> BlockSyncService<P> {
         let columns_indices = identifiers.iter().map(|id| id.index).collect::<Vec<_>>();
         match self
             .sync_manager
-            .map_peer_custody_columns(&columns_indices, None)
+            .map_peer_custody_columns(&columns_indices, Some(peer_id))
         {
             Ok(peer_custody_columns_mapping) => {
                 for (peer_id, columns) in peer_custody_columns_mapping {

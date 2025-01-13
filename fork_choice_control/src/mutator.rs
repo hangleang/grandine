@@ -53,7 +53,7 @@ use types::{
         containers::{DataColumnIdentifier, DataColumnSidecar, MatrixEntry},
         primitives::ColumnIndex,
     },
-    nonstandard::{Phase, RelativeEpoch, ValidationOutcome},
+    nonstandard::{RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
         primitives::{ExecutionBlockHash, Slot, ValidatorIndex, H256},
@@ -314,14 +314,10 @@ where
                     self.handle_store_sampling_columns(sampling_columns)
                 }
                 MutatorMessage::ReconstructedMissingColumns {
-                    block_root,
+                    block,
                     blob_count,
                     full_matrix,
-                } => self.handle_reconstructed_remaining_columns(
-                    block_root,
-                    blob_count,
-                    full_matrix,
-                )?,
+                } => self.handle_reconstructed_missing_columns(&block, blob_count, full_matrix)?,
             }
         }
     }
@@ -575,55 +571,30 @@ where
                     submission_time,
                 };
 
-                if block.phase() >= Phase::Fulu {
-                    let parent = self
+                if block.phase().is_peerdas_activated() {
+                    let missing_column_indices = self.store.indices_of_missing_data_columns(&block);
+                    let available_columns_count = self
                         .store
-                        .chain_link(pending_block.block.message().parent_root())
-                        .expect("block data availability check should be done after block parent presence check");
-
-                    let missing_column_indices =
-                        self.store.indices_of_missing_data_columns(&parent.block);
-
+                        .sampling_columns_count()
+                        .saturating_sub(missing_column_indices.len());
                     let number_of_columns = self.store.chain_config().number_of_columns();
-                    if missing_column_indices.len() * 2 < number_of_columns
-                        || !self.store.is_forward_synced()
-                    {
-                        let body = parent
-                            .block
-                            .message()
-                            .body()
-                            .post_deneb()
-                            .expect("cannot compute post deneb block body");
+                    debug!(
+                        "missing columns: [{}] at slot: {}",
+                        missing_column_indices.iter().join(", "),
+                        slot,
+                    );
 
-                        // check if it is supernode, and obtaining columns more than half
-                        if self.store.is_supernode() {
-                            let available_columns =
-                                self.store.available_columns_at_block(parent.block_root);
-
-                            // TODO(feature/fulu): random delay reconstruction as stated in the [specs]
-                            // (https://github.com/ethereum/consensus-specs/blob/8696fbf75387fb37a32fc08a6b934653198c6c0c/specs/fulu/das-core.md?plain=1#L257)
-                            if available_columns.len() > number_of_columns / 2
-                                && !self
-                                    .store
-                                    .has_reconstructed_data_column_sidecars(parent.block_root)
-                            {
-                                let blob_count = body.blob_kzg_commitments().len();
-
-                                info!(
-                                    "reconstructing missing columns of {} blobs at slot: {}",
-                                    blob_count, slot,
-                                );
-                                self.handle_reconstruct_missing_data_column_sidecars(
-                                    parent.block_root,
-                                    blob_count,
-                                );
-                            }
-                        }
-
+                    if missing_column_indices.is_empty() {
                         self.retry_block(wait_group, pending_block);
+                    } else if available_columns_count * 2 >= number_of_columns {
+                        self.handle_reconstructing_data_column_sidecars(
+                            wait_group,
+                            block,
+                            pending_block,
+                        );
                     } else {
                         info!(
-                            "block delayed until parent has sufficient data columns \
+                            "block delayed until sufficient data column sidecars are available \
                              (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
                         );
 
@@ -631,8 +602,26 @@ where
                             self.send_to_p2p(P2pMessage::Accept(gossip_id));
                         }
 
+                        let pending_block = reply_delayed_block_validation_result(
+                            pending_block,
+                            Ok(ValidationOutcome::Ignore(false)),
+                        );
+
+                        // we need to request those columns from peers through RPC for fullnode,
+                        // but for super-fullnode, we only need to request some columns enough to
+                        // reconstruct the rest. this would significantly reduce bandwidth usage.
+                        let request_length =
+                            if missing_column_indices.len() * 2 >= number_of_columns {
+                                number_of_columns
+                                    .saturating_div(2)
+                                    .saturating_sub(available_columns_count)
+                            } else {
+                                missing_column_indices.len()
+                            };
+
                         let column_ids = missing_column_indices
                             .into_iter()
+                            .take(request_length)
                             .map(|index| DataColumnIdentifier { block_root, index })
                             .collect_vec();
 
@@ -1494,24 +1483,6 @@ where
         }
     }
 
-    fn handle_reconstruct_missing_data_column_sidecars(
-        &mut self,
-        block_root: H256,
-        blob_count: usize,
-    ) {
-        self.store_mut()
-            .mark_reconstructing_data_columns_for_block(block_root);
-
-        self.update_store_snapshot();
-
-        self.spawn(ReconstructDataColumnSidecarsTask {
-            store_snapshot: self.owned_store(),
-            mutator_tx: self.owned_mutator_tx(),
-            block_root,
-            blob_count,
-        });
-    }
-
     fn handle_checkpoint_state(
         &mut self,
         wait_group: &W,
@@ -1605,34 +1576,76 @@ where
         }
     }
 
-    fn handle_reconstructed_remaining_columns(
+    fn handle_reconstructing_data_column_sidecars(
+        &mut self,
+        wait_group: W,
+        block: Arc<SignedBeaconBlock<P>>,
+        pending_block: PendingBlock<P>,
+    ) {
+        let block_root = block.message().hash_tree_root();
+        if !self.store.is_data_columns_reconstructed(block_root) {
+            let body = block
+                .message()
+                .body()
+                .post_deneb()
+                .expect("cannot compute post deneb block body");
+
+            let blob_count = body.blob_kzg_commitments().len();
+
+            let missing_indices = self.store.indices_of_missing_data_columns(&block);
+            if missing_indices.is_empty() {
+                info!("all column sidecars are available, ignored reconstruction");
+                self.retry_block(wait_group, pending_block);
+            } else {
+                info!(
+                    "handling data column sidecars reconstruction (slot: {}, columns: [{}])",
+                    block.message().slot(),
+                    missing_indices.iter().join(", "),
+                );
+
+                self.spawn(ReconstructDataColumnSidecarsTask {
+                    store_snapshot: self.owned_store(),
+                    mutator_tx: self.owned_mutator_tx(),
+                    block,
+                    blob_count,
+                });
+
+                self.store_mut().mark_as_reconstructed(block_root);
+                self.update_store_snapshot();
+
+                self.delay_block_until_blobs(block_root, pending_block);
+            }
+        }
+    }
+
+    fn handle_reconstructed_missing_columns(
         &self,
-        block_root: H256,
+        block: &Arc<SignedBeaconBlock<P>>,
         blob_count: usize,
         full_matrix: Vec<MatrixEntry>,
     ) -> Result<()> {
         let config = self.store.chain_config();
-        let chain_link = self.store.chain_link(block_root).expect(
-            "block must be available in the store during data column sidecars reconstruction",
-        );
+
+        let missing_indices = self.store.indices_of_missing_data_columns(block);
 
         let cells_and_kzg_proofs =
             eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-        for data_column_sidecar in eip_7594::construct_data_column_sidecars(
-            &chain_link.block,
-            &cells_and_kzg_proofs,
-            config,
-        )? {
+        let columns_to_store =
+            eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
+                .into_iter()
+                .filter(|column| missing_indices.contains(&column.index));
+
+        info!(
+            "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
+            block.message().hash_tree_root(),
+            missing_indices.iter().join(", "),
+        );
+
+        for data_column_sidecar in columns_to_store {
             let data_column_sidecar = Arc::new(data_column_sidecar);
-            let data_column_identifier: DataColumnIdentifier = data_column_sidecar.as_ref().into();
 
             debug!(
-                "storing reconstructed data column sidecar (slot: {}, data_column_sidecar: {data_column_sidecar:?})",
-                data_column_sidecar.slot(),
-            );
-
-            info!(
-                "storing reconstructed data column sidecar (slot: {}, id: {data_column_identifier:?})",
+                "storing data column sidecar from reconstruction (slot: {}, data_column_sidecar: {data_column_sidecar:?})",
                 data_column_sidecar.slot(),
             );
 
@@ -3025,7 +3038,7 @@ where
             .spawn(move || {
 
                 // TODO(feature/fulu): abstract phase check
-                if data_phase >= Phase::Fulu {
+                if data_phase.is_peerdas_activated() {
                     debug!("pruning old data column sidecars from storage up to slot {data_up_to_slot}…");
 
                     match storage.prune_old_data_column_sidecars(data_up_to_slot) {

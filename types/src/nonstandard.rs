@@ -79,6 +79,12 @@ impl Phase {
             .try_into()
             .expect("number of max blobs in block should fit in u64")
     }
+
+    // Modify condition if we want to change the peerdas activation behaviour
+    #[must_use]
+    pub fn is_peerdas_activated(self) -> bool {
+        self >= Self::Fulu
+    }
 }
 
 /// Like [`Option`], but with [`None`] greater than any [`Some`].
