@@ -31,6 +31,7 @@ use transition_functions::{
     combined,
     unphased::{self, ProcessSlots, StateRootPolicy},
 };
+use typenum::Unsigned as _;
 use types::{
     combined::{
         Attestation, AttesterSlashing, AttestingIndices, BeaconState, SignedAggregateAndProof,
@@ -224,7 +225,7 @@ pub struct Store<P: Preset> {
     finished_initial_forward_sync: bool,
     finished_back_sync: bool,
     sampling_columns: HashSet<ColumnIndex>,
-    reconstructing_columns: HashMap<H256, bool>,
+    data_columns_reconstruction: HashMap<H256, bool>,
 }
 
 impl<P: Preset> Store<P> {
@@ -302,7 +303,7 @@ impl<P: Preset> Store<P> {
             finished_initial_forward_sync,
             finished_back_sync,
             sampling_columns: HashSet::default(),
-            reconstructing_columns: HashMap::default(),
+            data_columns_reconstruction: HashMap::default(),
         }
     }
 
@@ -1127,16 +1128,21 @@ impl<P: Preset> Store<P> {
             return Ok(action);
         }
 
-        if self.should_check_data_availability_at_slot(block.message().slot())
-            && data_availability_policy.check()
-        {
-            if state.is_post_fulu() {
-                let missing_indices = self.indices_of_missing_data_columns(&parent.block);
+        let slot = block.message().slot();
+        if self.should_check_data_availability_at_slot(slot) && data_availability_policy.check() {
+            if state.phase().is_peerdas_activated() {
+                let parent_missing_indices = self.indices_of_missing_data_columns(&parent.block);
+                let current_missing_indices = self.indices_of_missing_data_columns(block);
+                log::debug!(
+                    "missing columns (slot: {slot}, parent: [{}], current: [{}])",
+                    parent_missing_indices.iter().join(", "),
+                    current_missing_indices.iter().join(", "),
+                );
 
-                if missing_indices.len() * 2 >= self.chain_config.number_of_columns()
-                    && self.is_forward_synced()
-                {
+                if current_missing_indices.len() * 2 >= self.chain_config.number_of_columns() {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
+                } else if !parent_missing_indices.is_empty() && self.is_forward_synced() {
+                    return Ok(BlockAction::DelayUntilBlobs(parent.block.clone_arc()));
                 }
             } else {
                 if !self.indices_of_missing_blobs(&block).is_empty() {
@@ -1965,18 +1971,9 @@ impl<P: Preset> Store<P> {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
         block_seen: bool,
         origin: &DataColumnSidecarOrigin,
-        metrics: Option<Arc<Metrics>>,
         parent_info: impl FnOnce() -> Option<(Arc<SignedBeaconBlock<P>>, PayloadStatus)>,
         state_fn: impl FnOnce() -> Result<Arc<BeaconState<P>>>,
     ) -> Result<DataColumnSidecarAction<P>> {
-        if let Some(metrics) = metrics.as_ref() {
-            metrics.data_column_sidecars_submitted_for_processing.inc();
-        }
-
-        let _data_column_sidecar_verification_timer = metrics
-            .as_ref()
-            .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
-
         let block_header = data_column_sidecar.signed_block_header.message;
         let block_root = block_header.hash_tree_root();
 
@@ -2143,10 +2140,6 @@ impl<P: Preset> Store<P> {
             );
         }
 
-        if let Some(metrics) = metrics.as_ref() {
-            metrics.verified_gossip_data_column_sidecar.inc();
-        }
-
         Ok(DataColumnSidecarAction::Accept(data_column_sidecar))
     }
 
@@ -2155,7 +2148,6 @@ impl<P: Preset> Store<P> {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
         block_seen: bool,
         origin: &DataColumnSidecarOrigin,
-        metrics: Option<Arc<Metrics>>,
     ) -> Result<DataColumnSidecarAction<P>> {
         let block_header = data_column_sidecar.signed_block_header.message;
 
@@ -2163,7 +2155,6 @@ impl<P: Preset> Store<P> {
             data_column_sidecar,
             block_seen,
             origin,
-            metrics,
             || {
                 self.chain_link(block_header.parent_root)
                     .map(|chain_link| (chain_link.block.clone_arc(), chain_link.payload_status))
@@ -3441,8 +3432,11 @@ impl<P: Preset> Store<P> {
             return vec![];
         };
 
-        if body.blob_kzg_commitments().is_empty()
-            || self.chain_config.phase_at_slot::<P>(block.slot()) < Phase::Fulu
+        if !self
+            .chain_config
+            .phase_at_slot::<P>(block.slot())
+            .is_peerdas_activated()
+            || body.blob_kzg_commitments().is_empty()
         {
             return vec![];
         }
@@ -3487,9 +3481,8 @@ impl<P: Preset> Store<P> {
             .unwrap_or(GENESIS_EPOCH)
     }
 
-    // TODO(feature/fulu): abstract phase check
     pub fn min_checked_data_availability_epoch(&self) -> Epoch {
-        if self.phase() >= Phase::Fulu {
+        if self.phase().is_peerdas_activated() {
             self.chain_config.fulu_fork_epoch.max(
                 self.tick
                     .epoch::<P>()
@@ -3544,8 +3537,8 @@ impl<P: Preset> Store<P> {
         !self.sampling_columns.is_empty()
     }
 
-    pub fn is_supernode(&self) -> bool {
-        self.sampling_columns.len() == self.chain_config.number_of_columns()
+    pub fn sampling_columns_count(&self) -> usize {
+        self.sampling_columns.len()
     }
 
     pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
@@ -3561,14 +3554,14 @@ impl<P: Preset> Store<P> {
             .collect()
     }
 
-    pub fn mark_reconstructing_data_columns_for_block(&mut self, block_root: H256) {
-        self.reconstructing_columns
-            .entry(block_root)
-            .and_modify(|entry| *entry = true);
+    pub fn is_data_columns_reconstructed(&self, block_root: H256) -> bool {
+        self.data_columns_reconstruction
+            .get(&block_root)
+            .map_or(false, |v| *v)
     }
 
-    pub fn has_reconstructed_data_column_sidecars(&self, block_root: H256) -> bool {
-        self.reconstructing_columns.get(&block_root).is_some()
+    pub fn mark_as_reconstructed(&mut self, block_root: H256) {
+        self.data_columns_reconstruction.insert(block_root, true);
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

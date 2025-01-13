@@ -1130,7 +1130,11 @@ pub async fn publish_block<P: Preset, W: Wait>(
     let (signed_beacon_block, proofs, blobs) = signed_api_block.split();
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
+    if controller
+        .chain_config()
+        .phase_at_slot::<P>(slot)
+        .is_peerdas_activated()
+    {
         let cells_and_kzg_proofs =
             eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars = eip_7594::construct_data_column_sidecars(
@@ -1191,7 +1195,11 @@ pub async fn publish_blinded_block<P: Preset, W: Wait>(
 
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
+    if controller
+        .chain_config()
+        .phase_at_slot::<P>(slot)
+        .is_peerdas_activated()
+    {
         let cells_and_kzg_proofs = eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
             blobs.unwrap_or_default().into_iter(),
         )?;
@@ -1278,7 +1286,11 @@ pub async fn publish_block_v2<P: Preset, W: Wait>(
     let (signed_beacon_block, proofs, blobs) = signed_api_block.split();
     let slot = signed_beacon_block.to_header().message.slot;
 
-    if controller.chain_config().phase_at_slot::<P>(slot) >= Phase::Fulu {
+    if controller
+        .chain_config()
+        .phase_at_slot::<P>(slot)
+        .is_peerdas_activated()
+    {
         let cells_and_kzg_proofs =
             eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
         let data_column_sidecars = eip_7594::construct_data_column_sidecars(

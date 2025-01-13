@@ -162,7 +162,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     //                      See the TODO in `types::combined`.
     fn is_post_deneb(&self) -> bool;
     fn is_post_electra(&self) -> bool;
-    fn is_post_fulu(&self) -> bool;
 }
 
 #[duplicate_item(
@@ -174,8 +173,7 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     validators_mut_with_balances_body
     balances_mut_with_slashings_body
     is_post_deneb_body
-    is_post_electra_body
-    is_post_fulu_body;
+    is_post_electra_body;
 
     [P: Preset, S: BeaconState<P> + Clone]
     [Arc<S>]
@@ -185,8 +183,7 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [self.make_mut().validators_mut_with_balances()]
     [self.make_mut().balances_mut_with_slashings()]
     [self.as_ref().is_post_deneb()]
-    [self.as_ref().is_post_electra()]
-    [self.as_ref().is_post_fulu()];
+    [self.as_ref().is_post_electra()];
 
     [P: Preset, S: BeaconState<P>]
     [Hc<S>]
@@ -196,8 +193,7 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [self.as_mut().validators_mut_with_balances()]
     [self.as_mut().balances_mut_with_slashings()]
     [self.as_ref().is_post_deneb()]
-    [self.as_ref().is_post_electra()]
-    [self.as_ref().is_post_fulu()];
+    [self.as_ref().is_post_electra()];
 
     [P: Preset]
     [Phase0BeaconState<P>]
@@ -206,7 +202,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [&mut self.field]
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
-    [false]
     [false]
     [false];
 
@@ -218,7 +213,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
     [false]
-    [false]
     [false];
 
     [P: Preset]
@@ -228,7 +222,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [&mut self.field]
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
-    [false]
     [false]
     [false];
 
@@ -240,7 +233,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
     [false]
-    [false]
     [false];
 
     [P: Preset]
@@ -251,7 +243,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
     [true]
-    [false]
     [false];
 
     [P: Preset]
@@ -262,8 +253,7 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
     [true]
-    [true]
-    [false];
+    [true];
 
     [P: Preset]
     [FuluBeaconState<P>]
@@ -272,7 +262,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     [&mut self.field]
     [(&mut self.validators, &self.balances)]
     [(&mut self.balances, &self.slashings)]
-    [true]
     [true]
     [true];
 
@@ -338,9 +327,6 @@ pub trait BeaconState<P: Preset>: SszHash<PackingFactor = U1> + Send + Sync {
     ]
     [
         self.phase() >= Phase::Electra
-    ]
-    [
-        self.phase() >= Phase::Fulu
     ];
 )]
 impl<parameters> BeaconState<P> for implementor {
@@ -418,10 +404,6 @@ impl<parameters> BeaconState<P> for implementor {
 
     fn is_post_electra(&self) -> bool {
         is_post_electra_body
-    }
-
-    fn is_post_fulu(&self) -> bool {
-        is_post_fulu_body
     }
 }
 
