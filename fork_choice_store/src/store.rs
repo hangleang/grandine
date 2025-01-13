@@ -3,6 +3,7 @@ use std::{
     backtrace::Backtrace,
     collections::binary_heap::{BinaryHeap, PeekMut},
     sync::{Arc, OnceLock},
+    time::Instant,
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
@@ -220,7 +221,7 @@ pub struct Store<P: Preset> {
     rejected_block_roots: HashSet<H256>,
     finished_initial_forward_sync: bool,
     sampling_columns: HashSet<ColumnIndex>,
-    reconstructing_columns: HashMap<H256, bool>,
+    data_columns_reconstruction_time: HashMap<H256, Instant>,
 }
 
 impl<P: Preset> Store<P> {
@@ -296,7 +297,7 @@ impl<P: Preset> Store<P> {
             rejected_block_roots: HashSet::default(),
             finished_initial_forward_sync,
             sampling_columns: HashSet::default(),
-            reconstructing_columns: HashMap::default(),
+            data_columns_reconstruction_time: HashMap::default(),
         }
     }
 
@@ -3397,14 +3398,19 @@ impl<P: Preset> Store<P> {
             .collect()
     }
 
-    pub fn mark_reconstructing_data_columns_for_block(&mut self, block_root: H256) {
-        self.reconstructing_columns
-            .entry(block_root)
-            .and_modify(|entry| *entry = true);
+    pub fn set_data_columns_reconstruction_time_for_block(
+        &mut self,
+        block_root: H256,
+        delay_until: Instant,
+    ) {
+        self.data_columns_reconstruction_time
+            .insert(block_root, delay_until);
     }
 
-    pub fn has_reconstructed_data_column_sidecars(&self, block_root: H256) -> bool {
-        self.reconstructing_columns.get(&block_root).is_some()
+    pub fn get_data_columns_reconstruction_time(&self, block_root: H256) -> Option<Instant> {
+        self.data_columns_reconstruction_time
+            .get(&block_root)
+            .copied()
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

@@ -14,6 +14,7 @@
 // tasks as well, but that would complicate code and would most likely not improve performance much
 // (in fact, the opposite may be true because `p2p_tx` would have to be cloned for each task).
 
+use core::time::Duration;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{
@@ -44,6 +45,7 @@ use itertools::{Either, Itertools as _};
 use log::{debug, error, info, warn};
 use num_traits::identities::Zero as _;
 use prometheus_metrics::Metrics;
+use rand::Rng as _;
 use ssz::SszHash as _;
 use std_ext::ArcExt as _;
 use types::{
@@ -571,29 +573,15 @@ where
                             .post_deneb()
                             .expect("cannot compute post deneb block body");
 
-                        // check if it is supernode, and obtaining columns more than half
-                        if self.store.is_supernode() {
-                            let available_columns =
-                                self.store.available_columns_at_block(parent.block_root);
+                        // check if it is supernode, and there are missing columns
+                        if self.store.is_supernode() && !missing_column_indices.is_empty() {
+                            let blob_count = body.blob_kzg_commitments().len();
 
-                            // TODO(feature/fulu): random delay reconstruction as stated in the [specs]
-                            // (https://github.com/ethereum/consensus-specs/blob/8696fbf75387fb37a32fc08a6b934653198c6c0c/specs/fulu/das-core.md?plain=1#L257)
-                            if available_columns.len() > number_of_columns / 2
-                                && !self
-                                    .store
-                                    .has_reconstructed_data_column_sidecars(parent.block_root)
-                            {
-                                let blob_count = body.blob_kzg_commitments().len();
-
-                                info!(
-                                    "reconstructing missing columns of {} blobs at slot: {}",
-                                    blob_count, slot,
-                                );
-                                self.handle_reconstruct_missing_data_column_sidecars(
-                                    parent.block_root,
-                                    blob_count,
-                                );
-                            }
+                            self.handle_reconstruct_missing_data_column_sidecars(
+                                parent.block_root,
+                                blob_count,
+                                missing_column_indices.len(),
+                            );
                         }
 
                         self.retry_block(wait_group, pending_block);
@@ -1362,18 +1350,40 @@ where
         &mut self,
         block_root: H256,
         blob_count: usize,
+        columns_indices_count: usize,
     ) {
-        self.store_mut()
-            .mark_reconstructing_data_columns_for_block(block_root);
+        // check if already set the delay reconstruction time, otherwise set it first
+        if let Some(delay_until) = self.store.get_data_columns_reconstruction_time(block_root) {
+            // check if now pass the delay time, then perform reconstruction
+            // otherwise, wait for next iteration
+            if delay_until <= Instant::now() {
+                info!(
+                    "reconstructing missing {} columns of {} blobs",
+                    columns_indices_count, blob_count,
+                );
 
-        self.update_store_snapshot();
+                self.spawn(ReconstructDataColumnSidecarsTask {
+                    store_snapshot: self.owned_store(),
+                    mutator_tx: self.owned_mutator_tx(),
+                    block_root,
+                    blob_count,
+                });
+            }
+        } else {
+            let random_delay = Duration::from_millis(rand::thread_rng().gen_range(0..200));
+            let delay_until = Instant::now()
+                .checked_add(random_delay)
+                .expect("random delay is out of bound, modify the range in generator");
 
-        self.spawn(ReconstructDataColumnSidecarsTask {
-            store_snapshot: self.owned_store(),
-            mutator_tx: self.owned_mutator_tx(),
-            block_root,
-            blob_count,
-        });
+            info!(
+                "delaying reconstruction for {} seconds to allow other columns arrive over the network",
+                random_delay.as_secs_f64(),
+            );
+            self.store_mut()
+                .set_data_columns_reconstruction_time_for_block(block_root, delay_until);
+
+            self.update_store_snapshot();
+        }
     }
 
     fn handle_checkpoint_state(
