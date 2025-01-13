@@ -172,7 +172,7 @@ pub enum MutatorMessage<P: Preset, W> {
         sampling_columns: HashSet<ColumnIndex>,
     },
     ReconstructedMissingColumns {
-        block_root: H256,
+        block: Arc<SignedBeaconBlock<P>>,
         blob_count: usize,
         full_matrix: Vec<MatrixEntry>,
     },

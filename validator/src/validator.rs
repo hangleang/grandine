@@ -922,7 +922,11 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
         if let Some(blobs) = block_blobs {
             if !blobs.is_empty() {
-                if self.chain_config.phase_at_slot::<P>(slot_head.slot()) >= Phase::Fulu {
+                if self
+                    .chain_config
+                    .phase_at_slot::<P>(slot_head.slot())
+                    .is_peerdas_activated()
+                {
                     let cells_and_kzg_proofs =
                         eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
                     for data_column_sidecar in eip_7594::construct_data_column_sidecars(
@@ -943,6 +947,14 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                                 data_column_sidecar.clone_arc(),
                             );
                         }
+
+                        // TODO(feature/fulu): force reconstruction for testing purpose, remove the check condition
+                        // if data_column_sidecar.slot() % 5 == 0
+                        //     && data_column_sidecar.index
+                        //         > self.chain_config.number_of_columns.saturating_div(2)
+                        // {
+                        //     break;
+                        // }
 
                         ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar)
                             .send(&self.p2p_tx);

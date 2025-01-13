@@ -653,7 +653,6 @@ where
                 data_column_sidecar,
                 block_seen,
                 origin,
-                None,
                 parent_fn,
                 state_fn,
             )

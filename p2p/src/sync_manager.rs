@@ -28,7 +28,6 @@ use types::{
     config::Config,
     deneb::containers::BlobIdentifier,
     fulu::{consts::NumberOfColumns, containers::DataColumnIdentifier, primitives::ColumnIndex},
-    nonstandard::Phase,
     phase0::primitives::{Epoch, Slot, H256},
     preset::Preset,
 };
@@ -316,15 +315,15 @@ impl SyncManager {
                             start_slot = data_availability_serve_range_slot;
                         };
 
-                        let columns = self
-                            .network_globals
-                            .sampling_columns
-                            .clone()
-                            .into_iter()
-                            .collect::<Vec<_>>();
+                        let batch = if config.phase_at_slot::<P>(start_slot).is_peerdas_activated()
+                        {
+                            let sampling_columns = self
+                                .network_globals
+                                .sampling_columns
+                                .iter()
+                                .copied()
+                                .collect::<Vec<_>>();
 
-                        // TDOD(feature/fulu): check phase instead
-                        let batch = if config.phase_at_slot::<P>(start_slot) >= Phase::Fulu {
                             SyncBatch {
                                 target: SyncTarget::DataColumnSidecar,
                                 direction: SyncDirection::Back,
@@ -334,7 +333,9 @@ impl SyncManager {
                                 response_received: false,
                                 retry_count: 0,
                                 // TODO(feature/fulu): handle error case
-                                data_columns: ContiguousList::try_from(columns).map(Arc::new).ok(),
+                                data_columns: ContiguousList::try_from(sampling_columns)
+                                    .map(Arc::new)
+                                    .ok(),
                             }
                         } else {
                             SyncBatch {
@@ -422,14 +423,6 @@ impl SyncManager {
             return Ok(vec![]);
         }
 
-        // TODO(feature/fulu): calculate based on type of requests (block, blob, or data column) by
-        // based on the rate limiter constraints, below are the number of slots per requests:
-        // 1, blocks: *64 ~ 128 (quota)
-        // 2, blobs: 32 (16 avg per slot) ~ *64 (8 avg per slot) = 512 (quota)
-        // 3, data columns: 5120 (quota)
-        //      - superfullnode (all 128 cols) = *32 ~ 40 (cap)
-        //      - fullnode (require 8 samples) = *320 (10 epochs) | 480 (15 epochs) ~ 640 (20 epochs)
-        // NOTE: option with "*" is consider to be used
         let slots_per_request = P::SlotsPerEpoch::non_zero().get() * EPOCHS_PER_REQUEST;
 
         let mut redownloads_increased = false;
@@ -515,7 +508,7 @@ impl SyncManager {
 
             max_slot = start_slot + count;
 
-            if config.phase_at_slot::<P>(start_slot) >= Phase::Fulu {
+            if config.phase_at_slot::<P>(start_slot).is_peerdas_activated() {
                 let data_column_serve_range_slot =
                     misc::data_column_serve_range_slot::<P>(config, current_slot);
                 if data_column_serve_range_slot < max_slot {
@@ -526,7 +519,7 @@ impl SyncManager {
                         .copied()
                         .collect::<Vec<_>>();
 
-                    match self.map_peer_custody_columns(&sampling_columns, None) {
+                    match self.map_peer_custody_columns(&sampling_columns, Some(peer_id)) {
                         Ok(peer_custody_columns_mapping) => {
                             for (peer_id, columns) in peer_custody_columns_mapping {
                                 sync_batches.push(SyncBatch {
@@ -549,7 +542,7 @@ impl SyncManager {
                                 Level::Debug,
                                 format_args!(
                                     "could not find reliable peers to request column sidecars: {}, error: {}",
-                                    self.network_globals.sampling_columns.iter().join(", "),
+                                    sampling_columns.iter().join(", "),
                                     error,
                                 ),
                             );
@@ -949,15 +942,22 @@ impl SyncManager {
     fn get_random_custodial_peer(
         &self,
         column_index: ColumnIndex,
-        ignore_peer: Option<PeerId>,
+        preferred_peer: Option<PeerId>,
     ) -> Option<PeerId> {
-        let mut custodial_peers = self.get_custodial_peers(column_index);
+        let custodial_peers = self.get_custodial_peers(column_index);
 
         // `ingore_peer` is often the previous requested peer that failed to response the request, or response
         // with an RPC error, which might not able to response to the request again, the peer
         // will be ignored from this request
-        if let Some(peer) = ignore_peer {
-            custodial_peers.retain(|&p| p != peer);
+        //
+        // if let Some(peer) = ignore_peer {
+        //     custodial_peers.retain(|&p| p != peer);
+        // }
+
+        if let Some(peer) = preferred_peer {
+            if custodial_peers.contains(&peer) {
+                return preferred_peer;
+            }
         }
 
         custodial_peers.choose(&mut thread_rng()).copied()
@@ -966,12 +966,13 @@ impl SyncManager {
     pub fn map_peer_custody_columns(
         &self,
         column_indices: &[ColumnIndex],
-        ignore_peer: Option<PeerId>,
+        preferred_peer: Option<PeerId>,
     ) -> Result<HashMap<PeerId, Vec<ColumnIndex>>> {
         let mut peer_columns_mapping = HashMap::new();
 
         for column_index in column_indices {
-            let Some(custodial_peer) = self.get_random_custodial_peer(*column_index, ignore_peer)
+            let Some(custodial_peer) =
+                self.get_random_custodial_peer(*column_index, preferred_peer)
             else {
                 return Err(MapPeerCustodyError::NoCustodyPeers {
                     column_index: *column_index,
