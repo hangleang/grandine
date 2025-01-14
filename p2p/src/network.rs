@@ -416,7 +416,9 @@ impl<P: Preset> Network<P> {
                             self.request_blobs_by_range(request_id, peer_id, start_slot, count);
                         }
                         SyncToP2p::RequestBlobsByRoot(request_id, peer_id, identifiers) => {
-                            self.request_blobs_by_root(request_id, peer_id, identifiers);
+                            if let Err(error) = self.request_blobs_by_root(request_id, peer_id, identifiers) {
+                                warn!("cannot request blobs by root: {error:?}");
+                            }
                         }
                         SyncToP2p::RequestBlocksByRange(request_id, peer_id, start_slot, count) => {
                             self.request_blocks_by_range(request_id, peer_id, start_slot, count);
@@ -929,7 +931,8 @@ impl<P: Preset> Network<P> {
                 self.handle_blobs_by_range_request(peer_id, peer_request_id, request_id, request)
             }
             RequestType::BlobsByRoot(request) => {
-                self.handle_blobs_by_root_request(peer_id, peer_request_id, request_id, request)
+                self.handle_blobs_by_root_request(peer_id, peer_request_id, request_id, request);
+                Ok(())
             }
             RequestType::Goodbye(goodbye_reason) => {
                 debug!("received GoodBye request (peer_id: {peer_id}, reason: {goodbye_reason:?})");
@@ -1049,19 +1052,8 @@ impl<P: Preset> Network<P> {
         debug!("received BlobSidecarsByRange request (peer_id: {peer_id}, request: {request:?})");
 
         let BlobsByRangeRequest { start_slot, count } = request;
-        let chain_config = self.controller.chain_config();
-        let phase = chain_config.phase_at_slot::<P>(start_slot);
-        let Some(max_request_blob_sidecars) = chain_config.max_request_blob_sidecars(phase) else {
-            return Err(Error::InvalidPhaseRequest {
-                phase,
-                protocol: "blob_sidecars_by_range".to_owned(),
-            }
-            .into());
-        };
 
-        let difference = count
-            .min(max_request_blob_sidecars)
-            .min(MAX_FOR_DOS_PREVENTION);
+        let difference = count.min(MAX_FOR_DOS_PREVENTION);
 
         let end_slot = start_slot
             .checked_add(difference)
@@ -1119,23 +1111,11 @@ impl<P: Preset> Network<P> {
         peer_request_id: PeerRequestId,
         request_id: IncomingRequestId,
         request: BlobsByRootRequest,
-    ) -> Result<()> {
+    ) {
         debug!("received BlobsByRootRequest request (peer_id: {peer_id}, request: {request:?})");
 
         // TODO(feature/deneb): MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
         let BlobsByRootRequest { blob_ids } = request;
-        let phase = self.controller.phase();
-        let Some(max_request_blob_sidecars) = self
-            .controller
-            .chain_config()
-            .max_request_blob_sidecars(phase)
-        else {
-            return Err(Error::InvalidPhaseRequest {
-                phase,
-                protocol: "blob_sidecars_by_root".to_owned(),
-            }
-            .into());
-        };
 
         let controller = self.controller.clone_arc();
         let network_to_service_tx = self.network_to_service_tx.clone();
@@ -1143,11 +1123,9 @@ impl<P: Preset> Network<P> {
         self.dedicated_executor
             .spawn(async move {
                 // > Clients MAY limit the number of blocks and sidecars in the response.
-                let blob_ids = blob_ids.into_iter().take(
-                    MAX_FOR_DOS_PREVENTION
-                        .min(max_request_blob_sidecars)
-                        .try_into()?,
-                );
+                let blob_ids = blob_ids
+                    .into_iter()
+                    .take(MAX_FOR_DOS_PREVENTION.try_into()?);
 
                 let blob_sidecars = controller.blob_sidecars_by_ids(blob_ids)?;
 
@@ -1182,9 +1160,7 @@ impl<P: Preset> Network<P> {
 
                 Ok::<_, anyhow::Error>(())
             })
-            .detach();
-
-        Ok(())
+            .detach()
     }
 
     fn handle_blocks_by_root_request(
@@ -1781,7 +1757,7 @@ impl<P: Preset> Network<P> {
         request_id: RequestId,
         peer_id: PeerId,
         blob_identifiers: Vec<BlobIdentifier>,
-    ) {
+    ) -> Result<()> {
         let blob_identifiers = blob_identifiers
             .into_iter()
             .filter(|blob_identifier| !self.received_blob_sidecars.contains_key(blob_identifier))
@@ -1792,11 +1768,14 @@ impl<P: Preset> Network<P> {
                 "cannot request BlobSidecarsByRoot: all requested blob sidecars have been received",
             );
 
-            return;
+            return Ok(());
         }
 
-        let request =
-            BlobsByRootRequest::new(self.controller.chain_config(), blob_identifiers.into_iter());
+        let request = BlobsByRootRequest::new(
+            self.controller.chain_config(),
+            self.controller.phase(),
+            blob_identifiers.into_iter(),
+        )?;
 
         debug!(
             "sending BlobSidecarsByRoot request (request_id: {request_id}, peer_id: {peer_id}, \
@@ -1804,6 +1783,8 @@ impl<P: Preset> Network<P> {
         );
 
         self.request(peer_id, request_id, RequestType::BlobsByRoot(request));
+
+        Ok(())
     }
 
     fn request_blocks_by_range(
@@ -1985,8 +1966,6 @@ impl<P: Preset> Network<P> {
 enum Error {
     #[error("end slot overflowed ({start_slot} + {difference})")]
     EndSlotOverflow { start_slot: u64, difference: u64 },
-    #[error("cannot request {protocol} at {phase}")]
-    InvalidPhaseRequest { protocol: String, phase: Phase },
 }
 
 fn fork_digest(fork_context: &ForkContext) -> ForkDigest {
