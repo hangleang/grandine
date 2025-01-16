@@ -496,12 +496,14 @@ impl SyncManager {
         let batches_in_front = usize::try_from(slot_distance / slots_per_request + 1)?;
 
         let mut max_slot = local_head_slot;
-        let data_availability_serve_range_slot =
-            if config.phase_at_slot::<P>(current_slot).is_peerdas_activated() {
-                misc::data_column_serve_range_slot::<P>(config, current_slot)
-            } else {
-                misc::blob_serve_range_slot::<P>(config, current_slot)
-            };
+        let data_availability_serve_range_slot = if config
+            .phase_at_slot::<P>(current_slot)
+            .is_peerdas_activated()
+        {
+            misc::data_column_serve_range_slot::<P>(config, current_slot)
+        } else {
+            misc::blob_serve_range_slot::<P>(config, current_slot)
+        };
 
         let mut sync_batches = vec![];
         for (peer_id, index) in Self::peer_sync_batch_assignments(&peers_to_sync)

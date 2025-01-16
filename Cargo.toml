@@ -473,7 +473,6 @@ bls-blst = { path = 'bls/bls-blst' }
 bls-core = { path = 'bls/bls-core' }
 bls-zkcrypto = { path = 'bls/bls-zkcrypto' }
 builder_api = { path = 'builder_api' }
-c-kzg = { git = 'https://github.com/ethereum/c-kzg-4844', branch = 'das' }
 clock = { path = 'clock' }
 data_dumper = { path = 'data_dumper' }
 database = { path = 'database' }
