@@ -949,7 +949,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                         }
 
                         // TODO(feature/fulu): force reconstruction for testing purpose, remove the check condition
-                        // if data_column_sidecar.slot() % 5 == 0
+                        // if data_column_sidecar.slot() % 2 == 0
                         //     && data_column_sidecar.index
                         //         > self.chain_config.number_of_columns.saturating_div(2)
                         // {

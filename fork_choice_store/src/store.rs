@@ -1148,26 +1148,27 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             return Ok(action);
         }
 
-        let slot = block.message().slot();
-        if self.should_check_data_availability_at_slot(slot) && data_availability_policy.check() {
+        if self.should_check_data_availability_at_slot(block.message().slot())
+            && data_availability_policy.check()
+        {
             if state.phase().is_peerdas_activated() {
-                let parent_missing_indices = self.indices_of_missing_data_columns(&parent.block);
-                let current_missing_indices = self.indices_of_missing_data_columns(block);
-                log::debug!(
-                    "missing columns (slot: {slot}, parent: [{}], current: [{}])",
-                    parent_missing_indices.iter().join(", "),
-                    current_missing_indices.iter().join(", "),
-                );
-
-                if current_missing_indices.len() * 2 >= self.chain_config.number_of_columns() {
-                    return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
-                } else if !parent_missing_indices.is_empty() && self.is_forward_synced() {
+                if !self
+                    .indices_of_missing_data_columns(&parent.block)
+                    .is_empty()
+                    && self.is_forward_synced()
+                {
                     return Ok(BlockAction::DelayUntilBlobs(parent.block.clone_arc()));
                 }
-            } else {
-                if !self.indices_of_missing_blobs(&block).is_empty() {
+
+                let missing_indices = self.indices_of_missing_data_columns(block);
+                if missing_indices.len() * 2 >= self.chain_config.number_of_columns()
+                    || (self.sampling_columns_count() * 2 < self.chain_config.number_of_columns()
+                        && !missing_indices.is_empty())
+                {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
                 }
+            } else if !self.indices_of_missing_blobs(block).is_empty() {
+                return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
             }
         }
 

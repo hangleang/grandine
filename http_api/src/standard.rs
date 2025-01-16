@@ -2981,7 +2981,7 @@ fn publish_block_to_network_with_data_column_sidecars<P: Preset>(
     ApiToP2p::PublishBeaconBlock(block).send(api_to_p2p_tx);
 }
 
-// TODO(feature/das): merge with `publish_signed_block`
+// TODO(feature/fulu): merge with `publish_signed_block`
 async fn publish_signed_block_with_data_column_sidecar<P: Preset, W: Wait>(
     block: Arc<SignedBeaconBlock<P>>,
     data_column_sidecars: Vec<DataColumnSidecar<P>>,
@@ -3155,7 +3155,7 @@ async fn get_pool_attestations<P: Preset, W: Wait>(
         .collect()
 }
 
-// TODO(feature/das): merge with `publish_signed_block_v2`
+// TODO(feature/fulu): merge with `publish_signed_block_v2`
 async fn publish_signed_block_v2_with_data_column_sidecar<P: Preset, W: Wait>(
     block: Arc<SignedBeaconBlock<P>>,
     data_column_sidecars: Vec<DataColumnSidecar<P>>,

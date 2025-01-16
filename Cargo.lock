@@ -1272,20 +1272,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "c-kzg"
-version = "1.0.3"
-source = "git+https://github.com/ethereum/c-kzg-4844?branch=das#9990d88016475fe153952044101fc40eefa5e560"
-dependencies = [
- "blst",
- "cc",
- "glob",
- "hex",
- "libc",
- "once_cell",
- "serde",
-]
-
-[[package]]
 name = "cached"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2347,11 +2333,10 @@ name = "eip_7594"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "c-kzg",
  "duplicate",
  "helper_functions",
  "itertools 0.13.0",
- "kzg",
+ "kzg_utils",
  "num-traits",
  "prometheus_metrics",
  "serde",
@@ -2361,6 +2346,7 @@ dependencies = [
  "test-generator",
  "thiserror 1.0.69",
  "try_from_iterator",
+ "typenum",
  "types",
 ]
 
@@ -4680,6 +4666,7 @@ dependencies = [
  "spec_test_utils",
  "test-generator",
  "thiserror 1.0.69",
+ "typenum",
  "types",
 ]
 

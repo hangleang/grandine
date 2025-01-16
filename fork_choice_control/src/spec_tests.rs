@@ -4,7 +4,6 @@ use clock::Tick;
 use duplicate::duplicate_item;
 use execution_engine::PayloadStatusWithBlockHash;
 use helper_functions::misc;
-use itertools::izip;
 use serde::Deserialize;
 use spec_test_utils::Case;
 use ssz::ContiguousList;
@@ -14,17 +13,14 @@ use test_generator::test_resources;
 use types::{
     combined::{Attestation, AttesterSlashing, BeaconBlock, BeaconState, SignedBeaconBlock},
     config::Config,
-    deneb::{
-        containers::BlobSidecar,
-        primitives::{Blob, KzgProof},
-    },
+    deneb::primitives::{Blob, KzgProof},
     nonstandard::{Phase, TimedPowBlock},
     phase0::{
         containers::Checkpoint,
         primitives::{Slot, UnixSeconds, H256},
     },
     preset::{Mainnet, Minimal, Preset},
-    traits::{BeaconState as _, SignedBeaconBlock as _},
+    traits::{BeaconState as _, PostDenebBeaconBlockBody, SignedBeaconBlock as _},
 };
 
 use crate::helpers::Context;
@@ -190,46 +186,32 @@ fn run_case<P: Preset>(config: &Arc<Config>, case: Case) {
                 type BlobBundle<P> =
                     ContiguousList<Blob<P>, <P as Preset>::MaxBlobCommitmentsPerBlock>;
 
-                let mut expected_blob_count = 0;
                 let block = case.ssz::<_, Arc<SignedBeaconBlock<P>>>(config.as_ref(), block);
 
-                if let Some(body) = block.message().body().post_deneb() {
-                    let blobs = blobs.map(|path| case.ssz_default::<BlobBundle<P>>(path));
-                    let signed_block_header = block.to_header();
+                let blobs = blobs
+                    .map(|path| case.ssz_default::<BlobBundle<P>>(path))
+                    .into_iter()
+                    .flatten();
 
-                    for (index, blob, kzg_proof, kzg_commitment) in izip!(
-                        0..,
-                        blobs.unwrap_or_default(),
-                        proofs.unwrap_or_default(),
-                        body.blob_kzg_commitments().iter().copied(),
-                    ) {
-                        // TODO(feature/deneb): Constructing proofs and sidecars is unnecessary.
-                        //                      Consider mocking `retrieve_blobs_and_proofs`
-                        //                      from `consensus-specs` using something like
-                        //                      `TestExecutionEngine`.
-                        let kzg_commitment_inclusion_proof = if let Some(post_electra_body) =
-                            block.message().body().post_electra()
-                        {
-                            misc::electra_kzg_commitment_inclusion_proof(post_electra_body, index)
-                                .expect("inclusion proof should be constructed successfully")
-                        } else {
-                            misc::deneb_kzg_commitment_inclusion_proof(body, index)
-                                .expect("inclusion proof should be constructed successfully")
-                        };
+                let proofs = proofs.into_iter().flatten();
 
-                        let blob_sidecar = BlobSidecar {
-                            index,
-                            blob,
-                            kzg_commitment,
-                            kzg_proof,
-                            signed_block_header,
-                            kzg_commitment_inclusion_proof,
-                        };
+                // TODO(feature/deneb): Constructing proofs and sidecars is unnecessary.
+                //                      Consider mocking `retrieve_blobs_and_proofs`
+                //                      from `consensus-specs` using something like
+                //                      `TestExecutionEngine`.
+                let blob_sidecars = misc::construct_blob_sidecars(&block, blobs, proofs)
+                    .expect("blob sidecars should be constructed successfully");
 
-                        context.on_blob_sidecar(blob_sidecar);
-                    }
+                let expected_blob_count = block
+                    .message()
+                    .body()
+                    .post_deneb()
+                    .map(PostDenebBeaconBlockBody::blob_kzg_commitments)
+                    .map(|contiguous_list| contiguous_list.len())
+                    .unwrap_or_default();
 
-                    expected_blob_count = body.blob_kzg_commitments().len();
+                for blob_sidecar in blob_sidecars {
+                    context.on_blob_sidecar(blob_sidecar);
                 }
 
                 if !valid && expected_blob_count > 0 {

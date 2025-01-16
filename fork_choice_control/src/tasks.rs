@@ -527,7 +527,7 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
         let block_root = block.message().hash_tree_root();
         let available_columns = store_snapshot.available_columns_at_block(block_root);
 
-        if available_columns.len() != store_snapshot.chain_config().number_of_columns() {
+        if available_columns.len() < store_snapshot.sampling_columns_count() {
             let partial_matrix = available_columns
                 .into_iter()
                 .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))

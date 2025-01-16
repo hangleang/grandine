@@ -568,13 +568,15 @@ where
                 let block_root = block.message().hash_tree_root();
 
                 let pending_block = PendingBlock {
-                    block: block.clone_arc(),
+                    block,
                     origin,
                     submission_time,
                 };
 
-                if block.phase().is_peerdas_activated() {
-                    let missing_column_indices = self.store.indices_of_missing_data_columns(&block);
+                if pending_block.block.phase().is_peerdas_activated() {
+                    let missing_column_indices = self
+                        .store
+                        .indices_of_missing_data_columns(&pending_block.block);
                     let available_columns_count = self
                         .store
                         .sampling_columns_count()
@@ -589,13 +591,9 @@ where
                     if missing_column_indices.is_empty() {
                         self.retry_block(wait_group, pending_block);
                     } else if available_columns_count * 2 >= number_of_columns {
-                        self.handle_reconstructing_data_column_sidecars(
-                            wait_group,
-                            block,
-                            pending_block,
-                        );
+                        self.handle_reconstructing_data_column_sidecars(wait_group, pending_block);
                     } else {
-                        info!(
+                        debug!(
                             "block delayed until sufficient data column sidecars are available \
                              (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
                         );
@@ -1500,9 +1498,9 @@ where
     fn handle_reconstructing_data_column_sidecars(
         &mut self,
         wait_group: W,
-        block: Arc<SignedBeaconBlock<P>>,
         pending_block: PendingBlock<P>,
     ) {
+        let block = pending_block.block.clone_arc();
         let block_root = block.message().hash_tree_root();
         if !self.store.is_data_columns_reconstructed(block_root) {
             let body = block
@@ -1549,28 +1547,30 @@ where
 
         let missing_indices = self.store.indices_of_missing_data_columns(block);
 
-        let cells_and_kzg_proofs =
-            eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-        let columns_to_store =
-            eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
-                .into_iter()
-                .filter(|column| missing_indices.contains(&column.index));
+        if !missing_indices.is_empty() {
+            let cells_and_kzg_proofs =
+                eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
+            let columns_to_store =
+                eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
+                    .into_iter()
+                    .filter(|column| missing_indices.contains(&column.index));
 
-        info!(
-            "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
-            block.message().hash_tree_root(),
-            missing_indices.iter().join(", "),
-        );
-
-        for data_column_sidecar in columns_to_store {
-            let data_column_sidecar = Arc::new(data_column_sidecar);
-
-            debug!(
-                "storing data column sidecar from reconstruction (slot: {}, data_column_sidecar: {data_column_sidecar:?})",
-                data_column_sidecar.slot(),
+            info!(
+                "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
+                block.message().hash_tree_root(),
+                missing_indices.iter().join(", "),
             );
 
-            P2pMessage::DataColumnReconstructed(data_column_sidecar).send(&self.p2p_tx);
+            for data_column_sidecar in columns_to_store {
+                let data_column_sidecar = Arc::new(data_column_sidecar);
+
+                debug!(
+                    "storing data column sidecar from reconstruction (slot: {}, data_column_sidecar: {data_column_sidecar:?})",
+                    data_column_sidecar.slot(),
+                );
+
+                P2pMessage::DataColumnReconstructed(data_column_sidecar).send(&self.p2p_tx);
+            }
         }
 
         Ok(())
@@ -2907,8 +2907,6 @@ where
         Builder::new()
             .name("old-data-pruner".to_owned())
             .spawn(move || {
-
-                // TODO(feature/fulu): abstract phase check
                 if data_phase.is_peerdas_activated() {
                     debug!("pruning old data column sidecars from storage up to slot {data_up_to_slot}…");
 
