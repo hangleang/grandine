@@ -206,7 +206,7 @@ impl<P: Preset, W: Wait> HandleExternalContributionTask<P, W> {
             }
         };
 
-        // TODO(feature/das): there is an issue when try to sync from genesis with data column sidecars,
+        // TODO(feature/fulu): there is an issue when try to sync from genesis with data column sidecars,
         // grandine got alot of `invalid_sync_committee_message`, need to double check with next
         // devnet
         let is_valid = validate_external_contribution_and_proof(

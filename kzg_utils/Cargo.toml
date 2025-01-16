@@ -13,6 +13,7 @@ rust-kzg-constantine = { workspace = true, optional = true }
 rust-kzg-mcl = { workspace = true, optional = true }
 rust-kzg-zkcrypto = { workspace = true, optional = true }
 thiserror = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
