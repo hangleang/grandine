@@ -1,6 +1,7 @@
 pub use trusted_setup::settings;
 
 pub mod eip_4844;
+pub mod eip_7594;
 
 mod error;
 mod trusted_setup;

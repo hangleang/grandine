@@ -1047,20 +1047,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "c-kzg"
-version = "1.0.3"
-source = "git+https://github.com/ethereum/c-kzg-4844?branch=das#9990d88016475fe153952044101fc40eefa5e560"
-dependencies = [
- "blst",
- "cc",
- "glob",
- "hex",
- "libc",
- "once_cell",
- "serde",
-]
-
-[[package]]
 name = "cached"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2047,11 +2033,10 @@ name = "eip_7594"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "c-kzg",
  "duplicate",
  "helper_functions",
  "itertools 0.13.0",
- "kzg",
+ "kzg_utils",
  "num-traits",
  "prometheus_metrics",
  "serde",
@@ -2061,6 +2046,7 @@ dependencies = [
  "test-generator",
  "thiserror 1.0.69",
  "try_from_iterator",
+ "typenum",
  "types",
 ]
 
@@ -4343,9 +4329,8 @@ dependencies = [
 [[package]]
 name = "kzg"
 version = "0.1.0"
-source = "git+https://github.com/grandinetech/rust-kzg.git#cb71d62a55e015758fd0277e67246fce2850340b"
+source = "git+https://github.com/grandinetech/rust-kzg.git#0070c96c1850a9a2329b649e1775c4ea1be6e046"
 dependencies = [
- "blst",
  "sha2 0.10.8",
  "siphasher 1.0.1",
 ]
@@ -4363,6 +4348,7 @@ dependencies = [
  "spec_test_utils",
  "test-generator",
  "thiserror 1.0.69",
+ "typenum",
  "types",
 ]
 
@@ -6693,7 +6679,7 @@ dependencies = [
 [[package]]
 name = "rust-kzg-blst"
 version = "0.1.0"
-source = "git+https://github.com/grandinetech/rust-kzg.git#cb71d62a55e015758fd0277e67246fce2850340b"
+source = "git+https://github.com/grandinetech/rust-kzg.git#0070c96c1850a9a2329b649e1775c4ea1be6e046"
 dependencies = [
  "blst",
  "hex",

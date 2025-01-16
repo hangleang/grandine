@@ -9,6 +9,7 @@ anyhow = { workspace = true }
 kzg = { workspace = true }
 rust-kzg-blst = { workspace = true }
 thiserror = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
