@@ -203,7 +203,7 @@ pub enum P2pMessage<P: Preset> {
     Reject(Option<GossipId>, MutatorRejectionReason),
     BlockNeeded(H256, Option<PeerId>),
     DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot, Option<PeerId>),
-    DataColumnReconstructed(Arc<DataColumnSidecar<P>>),
+    DataColumnReconstructed(Vec<Arc<DataColumnSidecar<P>>>),
     FinalizedCheckpoint(Checkpoint),
     HeadState(#[cfg_attr(test, derivative(Debug = "ignore"))] Arc<BeaconState<P>>),
     Stop,

@@ -10,8 +10,8 @@ use execution_engine::{ExecutionEngine, NullExecutionEngine};
 use features::Feature;
 use fork_choice_store::{
     AggregateAndProofOrigin, AttestationItem, AttestationOrigin, AttesterSlashingOrigin,
-    BlobSidecarOrigin, BlockAction, BlockOrigin, DataColumnSidecarOrigin, StateCacheProcessor,
-    Store,
+    BlobSidecarOrigin, BlockAction, BlockOrigin, DataColumnSidecarAction, DataColumnSidecarOrigin,
+    StateCacheProcessor, Store,
 };
 use futures::channel::mpsc::Sender as MultiSender;
 use helper_functions::{
@@ -410,7 +410,7 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
         let result =
             store_snapshot.validate_data_column_sidecar(data_column_sidecar, block_seen, &origin);
 
-        if result.is_ok() {
+        if let Ok(DataColumnSidecarAction::Accept(_)) = result {
             if let Some(metrics) = metrics.as_ref() {
                 metrics.verified_gossip_data_column_sidecar.inc();
             }
