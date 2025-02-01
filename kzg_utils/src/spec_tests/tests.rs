@@ -2,7 +2,7 @@
 
 use spec_test_utils::Case;
 use test_generator::test_resources;
-use types::preset::Mainnet;
+use types::{fulu::primitives::Cell, preset::Mainnet};
 
 use crate::{
     eip_4844::{
@@ -305,7 +305,7 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         .cells
         .iter()
         .map(|cell| deserialize(cell))
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<Result<Vec<Cell>, _>>()
     {
         Ok(cells) => cells,
         Err(_) => {
@@ -322,7 +322,8 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    match recover_cells_and_kzg_proofs(cell_indices, cells) {
+    let result = recover_cells_and_kzg_proofs(cell_indices, cells.iter());
+    match result {
         Ok((cells, proofs)) => {
             assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
             assert_eq!(proofs.into_iter().collect::<Vec<_>>(), expected_proofs);

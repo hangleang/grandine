@@ -256,11 +256,10 @@ pub fn recover_matrix(
 
     let mut matrix = vec![];
     for blob_index in 0..blob_count {
-        // TODO(feature/fulu): use cell reference, remove clone
         let (cell_indices, cells): (Vec<_>, Vec<_>) = partial_matrix
             .iter()
             .filter(|&e| (e.row_index == blob_index as u64))
-            .map(|e| (e.column_index, e.cell.clone()))
+            .map(|e| (e.column_index, &e.cell))
             .unzip();
 
         let (recovered_cells, recovered_proofs) =

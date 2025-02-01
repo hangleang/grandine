@@ -1166,9 +1166,10 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
                 }
 
                 let missing_indices = self.indices_of_missing_data_columns(block);
-                if missing_indices.len() * 2 >= self.chain_config.number_of_columns()
-                    || (self.sampling_columns_count() * 2 < self.chain_config.number_of_columns()
-                        && !missing_indices.is_empty())
+                let number_of_columns = self.chain_config.number_of_columns();
+                if !missing_indices.is_empty()
+                    && (self.sampling_columns_count() * 2 < number_of_columns
+                        || missing_indices.len() * 2 >= number_of_columns)
                 {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc(), state));
                 }
