@@ -18,7 +18,7 @@ use eth2_libp2p::{
         GoodbyeReason, Request, RequestId as IncomingRequestId, RequestType, StatusMessage,
     },
     service::Network as Service,
-    types::{core_topics_to_subscribe, EnrForkId, ForkContext, GossipEncoding, GossipKind},
+    types::{core_topics_to_subscribe, EnrForkId, ForkContext, GossipEncoding},
     Context, GossipId, GossipTopic, MessageAcceptance, MessageId, NetworkConfig, NetworkEvent,
     NetworkGlobals, PeerAction, PeerId, PeerRequestId, PubsubMessage, ReportSource, Response,
     ShutdownReason, Subnet, SubnetDiscovery, SyncInfo, SyncStatus, TaskExecutor,
@@ -376,8 +376,10 @@ impl<P: Preset> Network<P> {
                             P2pToSync::DataColumnsNeeded(identifiers, slot, peer_id)
                                 .send(&self.channels.p2p_to_sync_tx);
                         }
-                        P2pMessage::DataColumnReconstructed(data_column_sidecar) => {
-                            self.controller.on_reconstruct_data_column_sidecar(data_column_sidecar);
+                        P2pMessage::DataColumnReconstructed(data_column_sidecars) => {
+                            for data_column_sidecar in data_column_sidecars {
+                                self.controller.on_reconstruct_data_column_sidecar(data_column_sidecar);
+                            }
                         }
                         P2pMessage::BlockNeeded(root, peer_id) => {
                             debug!("block needed: {root:?} from {peer_id:?}");
@@ -524,13 +526,6 @@ impl<P: Preset> Network<P> {
 
                     ServiceInboundMessage::SubscribeNewForkTopics(next_phase, fork_digest)
                         .send(&self.network_to_service_tx);
-
-                    // Subscribe to sampling data column topics at Fulu fork
-                    // See <https://github.com/ethereum/consensus-specs/blob/5b25758078f5f0037ca461e9160f36ed465cf6f7/specs/fulu/p2p-interface.md?plain=1#L182>
-                    if next_phase == Phase::Fulu {
-                        ServiceInboundMessage::SubscribeToDataColumnTopics(fork_digest)
-                            .send(&self.network_to_service_tx);
-                    }
                 }
             }
         }
@@ -545,16 +540,6 @@ impl<P: Preset> Network<P> {
 
                     ServiceInboundMessage::UnsubscribeFromForkTopicsExcept(fork_digest)
                         .send(&self.network_to_service_tx);
-
-                    // Deprecate all blob sidecar topics at Fulu fork
-                    // See <https://github.com/ethereum/consensus-specs/blob/5b25758078f5f0037ca461e9160f36ed465cf6f7/specs/fulu/p2p-interface.md?plain=1#L178>
-                    if phase_by_slot == Phase::Fulu {
-                        for subnet_id in 0..chain_config.max_blob_sideacar_subnet_count() {
-                            let kind = GossipKind::BlobSidecar(subnet_id);
-                            ServiceInboundMessage::UnsubscribeKind(kind)
-                                .send(&self.network_to_service_tx);
-                        }
-                    }
                 }
             }
         }
@@ -2135,8 +2120,13 @@ impl<P: Preset> Network<P> {
             .collect::<HashSet<_>>();
 
         let current_phase = self.fork_context.current_fork();
+        let core_topics = core_topics_to_subscribe(
+            self.controller.chain_config(),
+            current_phase,
+            &self.network_globals.as_topic_config(),
+        );
 
-        for kind in core_topics_to_subscribe(self.controller.chain_config(), current_phase)
+        for kind in core_topics
             .iter()
             .filter(|kind| !subscribed_topics.contains(kind))
             .cloned()
@@ -2293,17 +2283,11 @@ fn run_network_service<P: Preset>(
                         ServiceInboundMessage::SubscribeNewForkTopics(phase, fork_digest) => {
                             service.subscribe_new_fork_topics(phase, fork_digest);
                         }
-                        ServiceInboundMessage::SubscribeToDataColumnTopics(fork_digest) => {
-                            service.subscribe_to_data_column_topics(fork_digest);
-                        }
                         ServiceInboundMessage::Unsubscribe(gossip_topic) => {
                             service.unsubscribe(gossip_topic);
                         }
                         ServiceInboundMessage::UnsubscribeFromForkTopicsExcept(fork_digest) => {
                             service.unsubscribe_from_fork_topics_except(fork_digest);
-                        }
-                        ServiceInboundMessage::UnsubscribeKind(gossip_kind) => {
-                            service.unsubscribe_kind(gossip_kind);
                         }
                         ServiceInboundMessage::UpdateEnrSubnet(subnet, advertise) => {
                             service.update_enr_subnet(subnet, advertise);

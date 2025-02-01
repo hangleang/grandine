@@ -1532,27 +1532,26 @@ where
         if !missing_indices.is_empty() {
             let cells_and_kzg_proofs =
                 eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-            let columns_to_store =
+            let mut columns_to_store =
                 eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
                     .into_iter()
-                    .filter(|column| missing_indices.contains(&column.index));
+                    .filter(|column| missing_indices.contains(&column.index))
+                    .map(Arc::new)
+                    .collect::<Vec<_>>();
+
+            // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
+            columns_to_store.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
             info!(
                 "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
                 block.message().hash_tree_root(),
-                missing_indices.iter().join(", "),
+                columns_to_store
+                    .iter()
+                    .map(|column| column.index)
+                    .join(", "),
             );
 
-            for data_column_sidecar in columns_to_store {
-                let data_column_sidecar = Arc::new(data_column_sidecar);
-
-                debug!(
-                    "storing data column sidecar from reconstruction (slot: {}, data_column_sidecar: {data_column_sidecar:?})",
-                    data_column_sidecar.slot(),
-                );
-
-                P2pMessage::DataColumnReconstructed(data_column_sidecar).send(&self.p2p_tx);
-            }
+            P2pMessage::DataColumnReconstructed(columns_to_store).send(&self.p2p_tx);
         }
 
         Ok(())

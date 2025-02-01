@@ -68,9 +68,9 @@ pub fn compute_cells_and_kzg_proofs<P: Preset>(
     Ok((cells, proofs.into_iter().map(Into::into)))
 }
 
-pub fn recover_cells_and_kzg_proofs(
+pub fn recover_cells_and_kzg_proofs<'cell>(
     cell_indices: impl IntoIterator<Item = CellIndex>,
-    cells: impl IntoIterator<Item = Cell>,
+    cells: impl IntoIterator<Item = &'cell Cell>,
 ) -> Result<(
     impl IntoIterator<Item = [u8; BytesPerCell::USIZE]>,
     impl IntoIterator<Item = KzgProof>,
