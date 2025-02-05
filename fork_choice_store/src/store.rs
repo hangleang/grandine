@@ -225,7 +225,8 @@ pub struct Store<P: Preset> {
     finished_initial_forward_sync: bool,
     finished_back_sync: bool,
     sampling_columns: HashSet<ColumnIndex>,
-    data_columns_reconstruction: HashMap<H256, bool>,
+    data_column_sidecars_reconstruction: HashMap<Slot, bool>,
+    republished_data_column_sidecars: HashMap<(Slot, ColumnIndex), bool>,
 }
 
 impl<P: Preset> Store<P> {
@@ -303,7 +304,8 @@ impl<P: Preset> Store<P> {
             finished_initial_forward_sync,
             finished_back_sync,
             sampling_columns: HashSet::default(),
-            data_columns_reconstruction: HashMap::default(),
+            data_column_sidecars_reconstruction: HashMap::default(),
+            republished_data_column_sidecars: HashMap::default(),
         }
     }
 
@@ -1132,14 +1134,6 @@ impl<P: Preset> Store<P> {
             && data_availability_policy.check()
         {
             if state.phase().is_peerdas_activated() {
-                if !self
-                    .indices_of_missing_data_columns(&parent.block)
-                    .is_empty()
-                    && self.is_forward_synced()
-                {
-                    return Ok(BlockAction::DelayUntilBlobs(parent.block.clone_arc()));
-                }
-
                 let missing_indices = self.indices_of_missing_data_columns(block);
                 let number_of_columns = self.chain_config.number_of_columns();
                 if !missing_indices.is_empty()
@@ -2162,15 +2156,16 @@ impl<P: Preset> Store<P> {
                     .map(|chain_link| (chain_link.block.clone_arc(), chain_link.payload_status))
             },
             || {
-                Ok(self
-                    .state_cache
-                    .try_state_at_slot(self, block_header.parent_root, block_header.slot)?
+                self.state_cache
+                    .try_state_at_slot(self, block_header.parent_root, block_header.slot)
+                    .transpose()
                     .unwrap_or_else(|| {
-                        self.chain_link(block_header.parent_root)
-                            .or_else(|| self.chain_link_before_or_at(block_header.slot))
-                            .map(|chain_link| chain_link.state(self))
-                            .unwrap_or_else(|| self.head().state(self))
-                    }))
+                        self.state_cache.state_at_slot(
+                            self,
+                            self.head().block_root,
+                            block_header.slot,
+                        )
+                    })
             },
         )
     }
@@ -2824,6 +2819,10 @@ impl<P: Preset> Store<P> {
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
         self.accepted_data_column_sidecars
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
+        self.data_column_sidecars_reconstruction
+            .retain(|slot, _| finalized_slot <= *slot);
+        self.republished_data_column_sidecars
+            .retain(|(slot, _), _| finalized_slot <= *slot);
         // TODO(feature/eip-7594):
         //
         // Data columns must be stored for much longer period than finalization.
@@ -3556,14 +3555,29 @@ impl<P: Preset> Store<P> {
             .collect()
     }
 
-    pub fn is_data_columns_reconstructed(&self, block_root: H256) -> bool {
-        self.data_columns_reconstruction
-            .get(&block_root)
+    pub fn is_data_column_sidecars_reconstructed(&self, slot: Slot) -> bool {
+        self.data_column_sidecars_reconstruction
+            .get(&slot)
             .map_or(false, |v| *v)
     }
 
-    pub fn mark_as_reconstructed(&mut self, block_root: H256) {
-        self.data_columns_reconstruction.insert(block_root, true);
+    pub fn mark_as_reconstructed(&mut self, slot: Slot) {
+        self.data_column_sidecars_reconstruction.insert(slot, true);
+    }
+
+    pub fn is_data_column_sidecar_republished(
+        &self,
+        slot: Slot,
+        column_index: ColumnIndex,
+    ) -> bool {
+        self.republished_data_column_sidecars
+            .get(&(slot, column_index))
+            .map_or(false, |v| *v)
+    }
+
+    pub fn mark_as_republished(&mut self, slot: Slot, column_index: ColumnIndex) {
+        self.republished_data_column_sidecars
+            .insert((slot, column_index), true);
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {
