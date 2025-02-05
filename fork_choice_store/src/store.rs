@@ -229,7 +229,8 @@ pub struct Store<P: Preset, S: Storage<P>> {
     finished_back_sync: bool,
     blacklisted_blocks: StdHashSet<H256>,
     sampling_columns: HashSet<ColumnIndex>,
-    data_columns_reconstruction: HashMap<H256, bool>,
+    data_column_sidecars_reconstruction: HashMap<Slot, bool>,
+    republished_data_column_sidecars: HashMap<(Slot, ColumnIndex), bool>,
 }
 
 impl<P: Preset, S: Storage<P>> Store<P, S> {
@@ -314,7 +315,8 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             finished_back_sync,
             blacklisted_blocks,
             sampling_columns: HashSet::default(),
-            data_columns_reconstruction: HashMap::default(),
+            data_column_sidecars_reconstruction: HashMap::default(),
+            republished_data_column_sidecars: HashMap::default(),
         }
     }
 
@@ -2864,6 +2866,10 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
         self.accepted_data_column_sidecars
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
+        self.data_column_sidecars_reconstruction
+            .retain(|slot, _| finalized_slot <= *slot);
+        self.republished_data_column_sidecars
+            .retain(|(slot, _), _| finalized_slot <= *slot);
         // TODO(feature/eip-7594):
         //
         // Data columns must be stored for much longer period than finalization.
@@ -3703,14 +3709,29 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .collect()
     }
 
-    pub fn is_data_columns_reconstructed(&self, block_root: H256) -> bool {
-        self.data_columns_reconstruction
-            .get(&block_root)
+    pub fn is_data_column_sidecars_reconstructed(&self, slot: Slot) -> bool {
+        self.data_column_sidecars_reconstruction
+            .get(&slot)
             .map_or(false, |v| *v)
     }
 
-    pub fn mark_as_reconstructed(&mut self, block_root: H256) {
-        self.data_columns_reconstruction.insert(block_root, true);
+    pub fn mark_as_reconstructed(&mut self, slot: Slot) {
+        self.data_column_sidecars_reconstruction.insert(slot, true);
+    }
+
+    pub fn is_data_column_sidecar_republished(
+        &self,
+        slot: Slot,
+        column_index: ColumnIndex,
+    ) -> bool {
+        self.republished_data_column_sidecars
+            .get(&(slot, column_index))
+            .map_or(false, |v| *v)
+    }
+
+    pub fn mark_as_republished(&mut self, slot: Slot, column_index: ColumnIndex) {
+        self.republished_data_column_sidecars
+            .insert((slot, column_index), true);
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

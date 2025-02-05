@@ -451,6 +451,14 @@ where
         self.spawn_blob_sidecar_task(blob_sidecar, true, BlobSidecarOrigin::ExecutionLayer)
     }
 
+    pub fn on_el_data_column_sidecar(&self, data_column_sidecar: Arc<DataColumnSidecar<P>>) {
+        self.spawn_data_column_sidecar_task(
+            data_column_sidecar,
+            true,
+            DataColumnSidecarOrigin::ExecutionLayer,
+        )
+    }
+
     pub fn on_reconstruct_data_column_sidecar(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,

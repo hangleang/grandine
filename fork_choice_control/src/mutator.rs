@@ -571,63 +571,84 @@ where
                     submission_time,
                 };
 
-                if pending_block.block.phase().is_peerdas_activated() {
-                    let missing_column_indices = self
-                        .store
-                        .indices_of_missing_data_columns(&pending_block.block);
-                    let available_columns_count = self
-                        .store
-                        .sampling_columns_count()
-                        .saturating_sub(missing_column_indices.len());
-                    let number_of_columns = self.store.chain_config().number_of_columns();
-                    debug!(
-                        "missing columns: [{}] at slot: {}",
-                        missing_column_indices.iter().join(", "),
-                        slot,
-                    );
+                if let Some(body) = pending_block.block.message().body().post_deneb() {
+                    let blob_count = body.blob_kzg_commitments().len();
 
-                    if missing_column_indices.is_empty() {
-                        self.retry_block(wait_group, pending_block);
-                    } else if available_columns_count * 2 >= number_of_columns {
-                        self.handle_reconstructing_data_column_sidecars(wait_group, pending_block);
-                    } else {
+                    if pending_block.block.phase().is_peerdas_activated() {
+                        let missing_column_indices = self
+                            .store
+                            .indices_of_missing_data_columns(&pending_block.block);
+                        let available_columns_count = self
+                            .store
+                            .sampling_columns_count()
+                            .saturating_sub(missing_column_indices.len());
+                        let number_of_columns = self.store.chain_config().number_of_columns();
                         debug!(
-                            "block delayed until sufficient data column sidecars are available \
-                             (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
+                            "missing columns: [{}] at slot: {}",
+                            missing_column_indices.iter().join(", "),
+                            slot,
                         );
 
-                        if let Some(gossip_id) = pending_block.origin.gossip_id() {
-                            self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                        if missing_column_indices.is_empty() {
+                            self.retry_block(wait_group, pending_block);
+                        } else if available_columns_count * 2 >= number_of_columns {
+                            self.handle_reconstructing_data_column_sidecars(
+                                wait_group,
+                                pending_block,
+                                blob_count,
+                            );
+                        } else {
+                            debug!(
+                                "block delayed until sufficient data column sidecars are available \
+                                 (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
+                            );
+
+                            if let Some(gossip_id) = pending_block.origin.gossip_id() {
+                                self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                            }
+
+                            let pending_block = reply_delayed_block_validation_result(
+                                pending_block,
+                                Ok(ValidationOutcome::Ignore(false)),
+                            );
+
+                            let blob_ids = (0..blob_count as u64)
+                                .map(|index| BlobIdentifier { block_root, index })
+                                .collect_vec();
+
+                            let peer_id = pending_block.origin.peer_id();
+
+                            self.request_blobs_from_execution_engine(
+                                pending_block.block.clone_arc(),
+                                blob_ids,
+                                peer_id,
+                            );
+
+                            // we need to request those columns from peers through RPC for fullnode,
+                            // but for super-fullnode, we only need to request some columns enough to
+                            // reconstruct the rest. this would significantly reduce bandwidth usage.
+                            let request_length =
+                                if missing_column_indices.len() * 2 >= number_of_columns {
+                                    number_of_columns
+                                        .saturating_div(2)
+                                        .saturating_sub(available_columns_count)
+                                } else {
+                                    missing_column_indices.len()
+                                };
+
+                            let column_ids = missing_column_indices
+                                .into_iter()
+                                .take(request_length)
+                                .map(|index| DataColumnIdentifier { block_root, index })
+                                .collect_vec();
+
+                            let peer_id = pending_block.origin.peer_id();
+
+                            P2pMessage::DataColumnsNeeded(column_ids, slot, peer_id)
+                                .send(&self.p2p_tx);
+
+                            self.delay_block_until_blobs(block_root, pending_block);
                         }
-
-                        let pending_block = reply_delayed_block_validation_result(
-                            pending_block,
-                            Ok(ValidationOutcome::Ignore(false)),
-                        );
-
-                        // we need to request those columns from peers through RPC for fullnode,
-                        // but for super-fullnode, we only need to request some columns enough to
-                        // reconstruct the rest. this would significantly reduce bandwidth usage.
-                        let request_length =
-                            if missing_column_indices.len() * 2 >= number_of_columns {
-                                number_of_columns
-                                    .saturating_div(2)
-                                    .saturating_sub(available_columns_count)
-                            } else {
-                                missing_column_indices.len()
-                            };
-
-                        let column_ids = missing_column_indices
-                            .into_iter()
-                            .take(request_length)
-                            .map(|index| DataColumnIdentifier { block_root, index })
-                            .collect_vec();
-
-                        let peer_id = pending_block.origin.peer_id();
-
-                        P2pMessage::DataColumnsNeeded(column_ids, slot, peer_id).send(&self.p2p_tx);
-
-                        self.delay_block_until_blobs(block_root, pending_block);
                     }
                 } else {
                     let block_blob_availability = self.block_blob_availability(
@@ -1387,7 +1408,11 @@ where
     ) {
         match result {
             Ok(DataColumnSidecarAction::Accept(data_column_sidecar)) => {
-                if origin.is_from_reconstruction() {
+                if origin.is_from_el_or_reconstruction() {
+                    self.store_mut()
+                        .mark_as_republished(data_column_sidecar.slot(), data_column_sidecar.index);
+                    self.update_store_snapshot();
+
                     P2pMessage::PublishDataColumnSidecar(data_column_sidecar.clone_arc())
                         .send(&self.p2p_tx);
                 }
@@ -1578,26 +1603,21 @@ where
         &mut self,
         wait_group: W,
         pending_block: PendingBlock<P>,
+        blob_count: usize,
     ) {
         let block = pending_block.block.clone_arc();
+        let slot = block.message().slot();
         let block_root = block.message().hash_tree_root();
-        if !self.store.is_data_columns_reconstructed(block_root) {
-            let body = block
-                .message()
-                .body()
-                .post_deneb()
-                .expect("cannot compute post deneb block body");
 
-            let blob_count = body.blob_kzg_commitments().len();
-
+        if !self.store.is_data_column_sidecars_reconstructed(slot) {
             let missing_indices = self.store.indices_of_missing_data_columns(&block);
+
             if missing_indices.is_empty() {
                 info!("all column sidecars are available, ignored reconstruction");
                 self.retry_block(wait_group, pending_block);
             } else {
                 info!(
-                    "handling data column sidecars reconstruction (slot: {}, columns: [{}])",
-                    block.message().slot(),
+                    "handling data column sidecars reconstruction (slot: {slot}, columns: [{}])",
                     missing_indices.iter().join(", "),
                 );
 
@@ -1608,7 +1628,7 @@ where
                     blob_count,
                 });
 
-                self.store_mut().mark_as_reconstructed(block_root);
+                self.store_mut().mark_as_reconstructed(slot);
                 self.update_store_snapshot();
 
                 self.delay_block_until_blobs(block_root, pending_block);
@@ -2183,13 +2203,16 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
-        self.spawn(PersistDataColumnSidecarsTask {
-            store_snapshot: self.owned_store(),
-            storage: self.storage.clone_arc(),
-            mutator_tx: self.owned_mutator_tx(),
-            wait_group: wait_group.clone(),
-            metrics: self.metrics.clone(),
-        });
+        // TODO(feature/fulu): only persist custody columns
+        if !self.storage.prune_storage_enabled() {
+            self.spawn(PersistDataColumnSidecarsTask {
+                store_snapshot: self.owned_store(),
+                storage: self.storage.clone_arc(),
+                mutator_tx: self.owned_mutator_tx(),
+                wait_group: wait_group.clone(),
+                metrics: self.metrics.clone(),
+            });
+        }
 
         self.handle_potential_head_change(wait_group, &old_head, head_was_optimistic);
     }

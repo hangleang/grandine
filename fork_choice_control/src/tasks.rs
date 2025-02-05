@@ -397,39 +397,47 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
             metrics,
         } = self;
 
-        let _data_column_sidecar_verification_timer = metrics
-            .as_ref()
-            .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
+        if !store_snapshot.is_data_column_sidecar_republished(
+            data_column_sidecar.slot(),
+            data_column_sidecar.index,
+        ) {
+            let _data_column_sidecar_verification_timer = metrics
+                .as_ref()
+                .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
 
-        let _timer = metrics
-            .as_ref()
-            .map(|metrics| metrics.fc_data_column_sidecar_task_times.start_timer());
+            let _timer = metrics
+                .as_ref()
+                .map(|metrics| metrics.fc_data_column_sidecar_task_times.start_timer());
 
-        let block_root = data_column_sidecar
-            .signed_block_header
-            .message
-            .hash_tree_root();
-        let index = data_column_sidecar.index;
-        let data_column_identifier = DataColumnIdentifier { block_root, index };
+            let block_root = data_column_sidecar
+                .signed_block_header
+                .message
+                .hash_tree_root();
+            let index = data_column_sidecar.index;
+            let data_column_identifier = DataColumnIdentifier { block_root, index };
 
-        let result =
-            store_snapshot.validate_data_column_sidecar(data_column_sidecar, block_seen, &origin);
+            let result = store_snapshot.validate_data_column_sidecar(
+                data_column_sidecar,
+                block_seen,
+                &origin,
+            );
 
-        if let Ok(DataColumnSidecarAction::Accept(_)) = result {
-            if let Some(metrics) = metrics.as_ref() {
-                metrics.verified_gossip_data_column_sidecar.inc();
+            if let Ok(DataColumnSidecarAction::Accept(_)) = result {
+                if let Some(metrics) = metrics.as_ref() {
+                    metrics.verified_gossip_data_column_sidecar.inc();
+                }
             }
-        }
 
-        MutatorMessage::DataColumnSidecar {
-            wait_group,
-            result,
-            origin,
-            data_column_identifier,
-            block_seen,
-            submission_time,
+            MutatorMessage::DataColumnSidecar {
+                wait_group,
+                result,
+                origin,
+                data_column_identifier,
+                block_seen,
+                submission_time,
+            }
+            .send(&mutator_tx);
         }
-        .send(&mutator_tx);
     }
 }
 
