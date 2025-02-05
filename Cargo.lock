@@ -2602,6 +2602,7 @@ dependencies = [
  "dashmap",
  "dedicated_executor",
  "derive_more 1.0.0",
+ "eip_7594",
  "either",
  "enum-iterator",
  "eth2_libp2p",
