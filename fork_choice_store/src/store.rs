@@ -1987,7 +1987,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     pub fn validate_data_column_sidecar_with_state(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
-        block_seen: bool,
+        _block_seen: bool,
         origin: &DataColumnSidecarOrigin,
         parent_info: impl FnOnce() -> Option<(Arc<SignedBeaconBlock<P>>, PayloadStatus)>,
         state_fn: impl FnOnce() -> Result<Arc<BeaconState<P>>>,
@@ -2041,8 +2041,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             block_header.slot,
             block_header.proposer_index,
             data_column_sidecar.index,
-        )) && !block_seen
-        {
+        )) {
             return Ok(DataColumnSidecarAction::Ignore(true));
         }
 
