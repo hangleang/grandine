@@ -591,7 +591,10 @@ where
 
                         if missing_column_indices.is_empty() {
                             self.retry_block(wait_group, pending_block);
-                        } else if available_columns_count * 2 >= number_of_columns {
+                        } else if available_columns_count * 2 >= number_of_columns
+                            && self.store.is_forward_synced()
+                        {
+                            // Only reconstruct after node has synced up to the head
                             self.handle_reconstructing_data_column_sidecars(
                                 wait_group,
                                 pending_block,
@@ -624,9 +627,6 @@ where
                                 peer_id,
                             );
 
-                            // we need to request those columns from peers through RPC for fullnode,
-                            // but for super-fullnode, we only need to request some columns enough to
-                            // reconstruct the rest. this would significantly reduce bandwidth usage.
                             let request_length =
                                 if missing_column_indices.len() * 2 >= number_of_columns {
                                     number_of_columns
@@ -1491,7 +1491,10 @@ where
 
         self.update_store_snapshot();
 
-        if self.store.has_unpersisted_data_column_sidecars() {
+        if self.store.has_unpersisted_data_column_sidecars()
+            && self.store.unpersisted_data_column_sidecars().count()
+                >= self.store.chain_config().number_of_columns()
+        {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
@@ -2046,8 +2049,10 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
-        // TODO(feature/fulu): only persist custody columns
-        if !self.storage.prune_storage_enabled() {
+        if !self.storage.prune_storage_enabled()
+            && self.store.unpersisted_data_column_sidecars().count()
+                >= self.store.chain_config().number_of_columns()
+        {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),

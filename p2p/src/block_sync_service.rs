@@ -647,7 +647,10 @@ impl<P: Preset> BlockSyncService<P> {
                 SyncTarget::DataColumnSidecar => {
                     let data_columns = batch.data_columns.clone().unwrap_or_default();
 
-                    match self.sync_manager.map_peer_custody_columns(&data_columns) {
+                    match self
+                        .sync_manager
+                        .map_peer_custody_columns(&data_columns, None)
+                    {
                         Ok(peer_custody_columns_mapping) => {
                             for (peer_id, columns) in peer_custody_columns_mapping {
                                 // TODO(feature/fulu): catch error here
@@ -661,7 +664,7 @@ impl<P: Preset> BlockSyncService<P> {
                                     peer_id,
                                     start_slot: batch.start_slot,
                                     count: batch.count,
-                                    retry_count: batch.retry_count,
+                                    retry_count: batch.retry_count + 1,
                                     response_received: batch.response_received,
                                     data_columns: Some(columns.clone_arc()),
                                 };
@@ -954,7 +957,10 @@ impl<P: Preset> BlockSyncService<P> {
         }
 
         let columns_indices = identifiers.iter().map(|id| id.index).collect::<Vec<_>>();
-        match self.sync_manager.map_peer_custody_columns(&columns_indices) {
+        match self
+            .sync_manager
+            .map_peer_custody_columns(&columns_indices, None)
+        {
             Ok(peer_custody_columns_mapping) => {
                 for (peer_id, columns) in peer_custody_columns_mapping {
                     let request_id = self.request_id()?;
