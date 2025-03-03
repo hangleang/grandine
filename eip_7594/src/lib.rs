@@ -154,7 +154,7 @@ pub fn verify_data_column_sidecar<P: Preset>(
     }
 
     // A sidecar for zero blobs is invalid
-    if kzg_commitments.len() == 0 {
+    if kzg_commitments.is_empty() {
         return false;
     }
 

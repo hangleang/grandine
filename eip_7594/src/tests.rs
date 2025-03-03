@@ -1,5 +1,3 @@
-#![expect(clippy::manual_let_else)]
-
 use std::collections::HashSet;
 
 use duplicate::duplicate_item;

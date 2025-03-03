@@ -862,6 +862,7 @@ impl Config {
         32_usize.checked_add(n)?.checked_add(n / 6)
     }
 
+    #[must_use]
     pub fn max_blob_sideacar_subnet_count(&self) -> u64 {
         self.blob_sidecar_subnet_count
             .get()
