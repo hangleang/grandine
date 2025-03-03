@@ -482,8 +482,17 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         proposer_index: ValidatorIndex,
         block_root: H256,
     ) -> bool {
-        self.blob_cache
-            .exibits_equivocation(slot, proposer_index, block_root)
+        if self
+            .chain_config()
+            .phase_at_slot::<P>(slot)
+            .is_peerdas_activated()
+        {
+            self.data_column_cache
+                .exibits_equivocation(slot, proposer_index, block_root)
+        } else {
+            self.blob_cache
+                .exibits_equivocation(slot, proposer_index, block_root)
+        }
     }
 
     #[must_use]
