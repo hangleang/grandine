@@ -329,6 +329,10 @@ struct BeaconNodeOptions {
     #[clap(long)]
     state_slot: Option<Slot>,
 
+    /// Subscribe to all data column subnets
+    #[clap(long)]
+    subscribe_all_data_column_subnets: bool,
+
     /// Subscribe to all subnets
     #[clap(long)]
     subscribe_all_subnets: bool,
@@ -942,6 +946,7 @@ impl GrandineArgs {
             max_epochs_to_retain_states_in_cache,
             state_cache_lock_timeout,
             state_slot,
+            subscribe_all_data_column_subnets,
             subscribe_all_subnets,
             suggested_fee_recipient,
             jwt_id,
@@ -1242,7 +1247,10 @@ impl GrandineArgs {
             .into_iter()
             .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllAttestationSubnets))
             .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllSyncCommitteeSubnets))
-            .chain(subscribe_all_subnets.then_some(Feature::SubscribeToAllDataColumnSubnets))
+            .chain(
+                subscribe_all_data_column_subnets
+                    .then_some(Feature::SubscribeToAllDataColumnSubnets),
+            )
             .collect::<Vec<_>>();
 
         // enabling these features here, because it being used in below network config conversion
