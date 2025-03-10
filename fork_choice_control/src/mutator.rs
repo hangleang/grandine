@@ -85,6 +85,8 @@ use crate::{
     wait::Wait,
 };
 
+const MAX_COLUMNS_COUNT_TO_PERSIST: usize = 1usize << 15;
+
 #[expect(clippy::struct_field_names)]
 pub struct Mutator<P: Preset, E, W, TS, PS, LS, NS, SS, VS> {
     store: Arc<Store<P>>,
@@ -578,11 +580,10 @@ where
                         let missing_column_indices = self
                             .store
                             .indices_of_missing_data_columns(&pending_block.block);
-                        let available_columns_count = self
-                            .store
-                            .sampling_columns_count()
-                            .saturating_sub(missing_column_indices.len());
+                        let sampling_columns_count = self.store.sampling_columns_count();
                         let number_of_columns = self.store.chain_config().number_of_columns();
+                        let available_columns_count =
+                            sampling_columns_count.saturating_sub(missing_column_indices.len());
                         debug!(
                             "missing columns: [{}] at slot: {}",
                             missing_column_indices.iter().join(", "),
@@ -615,26 +616,30 @@ where
                                 Ok(ValidationOutcome::Ignore(false)),
                             );
 
-                            let blob_ids = (0..blob_count as u64)
-                                .map(|index| BlobIdentifier { block_root, index })
-                                .collect_vec();
-
                             let peer_id = pending_block.origin.peer_id();
 
-                            self.request_blobs_from_execution_engine(
-                                pending_block.block.clone_arc(),
-                                blob_ids,
-                                peer_id,
-                            );
+                            if sampling_columns_count == number_of_columns {
+                                let blob_ids = (0..blob_count as u64)
+                                    .map(|index| BlobIdentifier { block_root, index })
+                                    .collect_vec();
 
-                            let request_length =
-                                if missing_column_indices.len() * 2 >= number_of_columns {
-                                    number_of_columns
-                                        .saturating_div(2)
-                                        .saturating_sub(available_columns_count)
-                                } else {
-                                    missing_column_indices.len()
-                                };
+                                self.request_blobs_from_execution_engine(
+                                    pending_block.block.clone_arc(),
+                                    blob_ids,
+                                    peer_id,
+                                );
+                            }
+
+                            let request_length = if missing_column_indices.len() * 2
+                                >= number_of_columns
+                                && self.store.is_forward_synced()
+                            {
+                                number_of_columns
+                                    .saturating_div(2)
+                                    .saturating_sub(available_columns_count)
+                            } else {
+                                missing_column_indices.len()
+                            };
 
                             let column_ids = missing_column_indices
                                 .into_iter()
@@ -642,10 +647,7 @@ where
                                 .map(|index| DataColumnIdentifier { block_root, index })
                                 .collect_vec();
 
-                            let peer_id = pending_block.origin.peer_id();
-
-                            P2pMessage::DataColumnsNeeded(column_ids, slot, peer_id)
-                                .send(&self.p2p_tx);
+                            P2pMessage::DataColumnsNeeded(column_ids, slot).send(&self.p2p_tx);
 
                             self.delay_block_until_blobs(block_root, pending_block);
                         }
@@ -1321,14 +1323,26 @@ where
                 }
 
                 let (gossip_id, sender) = origin.split();
+                if self
+                    .store
+                    .sampling_columns()
+                    .into_iter()
+                    .contains(&data_column_sidecar.index)
+                {
+                    if let Some(gossip_id) = gossip_id {
+                        P2pMessage::Accept(gossip_id).send(&self.p2p_tx);
+                    }
 
-                if let Some(gossip_id) = gossip_id {
-                    P2pMessage::Accept(gossip_id).send(&self.p2p_tx);
+                    reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
+
+                    self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
+                } else {
+                    if let Some(gossip_id) = gossip_id {
+                        P2pMessage::Ignore(gossip_id).send(&self.p2p_tx);
+                    }
+
+                    reply_to_http_api(sender, Ok(ValidationOutcome::Ignore(false)));
                 }
-
-                reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
-
-                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
             }
             Ok(DataColumnSidecarAction::Ignore(publishable)) => {
                 let (gossip_id, sender) = origin.split();
@@ -1341,6 +1355,7 @@ where
             }
             Ok(DataColumnSidecarAction::DelayUntilParent(data_column_sidecar)) => {
                 let parent_root = data_column_sidecar.signed_block_header.message.parent_root;
+                let column_index = data_column_sidecar.index;
 
                 let pending_data_column_sidecar = PendingDataColumnSidecar {
                     data_column_sidecar,
@@ -1351,7 +1366,9 @@ where
 
                 if self.store.contains_block(parent_root) {
                     self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar);
-                } else {
+                } else if !self
+                    .has_delay_data_column_sidecar_until_parent(parent_root, column_index)
+                {
                     debug!("data column sidecar delayed until block parent: {parent_root:?}");
 
                     let peer_id = pending_data_column_sidecar.origin.peer_id();
@@ -1365,10 +1382,15 @@ where
                         );
 
                     self.delay_data_column_sidecar_until_parent(pending_data_column_sidecar);
+                } else {
+                    debug!(
+                        "already delayed data column sidecar until block parent: {parent_root:?}",
+                    );
                 }
             }
             Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar)) => {
                 let slot = data_column_sidecar.signed_block_header.message.slot;
+                let column_index = data_column_sidecar.index;
 
                 let pending_data_column_sidecar = PendingDataColumnSidecar {
                     data_column_sidecar,
@@ -1379,7 +1401,7 @@ where
 
                 if slot <= self.store.slot() {
                     self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar);
-                } else {
+                } else if !self.has_delay_data_column_sidecar_until_slot(slot, column_index) {
                     debug!("data column sidecar delayed until slot: {slot}");
 
                     let pending_data_column_sidecar =
@@ -1389,6 +1411,8 @@ where
                         );
 
                     self.delay_data_column_sidecar_until_slot(pending_data_column_sidecar);
+                } else {
+                    debug!("already delayed data column sidecar until slot: {slot}");
                 }
             }
             Err(error) => {
@@ -1492,8 +1516,9 @@ where
         self.update_store_snapshot();
 
         if self.store.has_unpersisted_data_column_sidecars()
-            && self.store.unpersisted_data_column_sidecars().count()
-                >= self.store.chain_config().number_of_columns()
+            && (self.store.is_forward_synced()
+                || self.store.unpersisted_data_column_sidecars().count()
+                    >= MAX_COLUMNS_COUNT_TO_PERSIST)
         {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
@@ -1921,6 +1946,10 @@ where
 
         if let Some(objects) = self.take_delayed_until_block(block_root) {
             debug!("retrying objects delayed until block {block_root:?}");
+            debug!(
+                "retrying {} pending data column sidecars after block {block_root:?} imported",
+                objects.data_column_sidecars.len(),
+            );
             self.retry_delayed(objects, wait_group);
         }
 
@@ -2042,16 +2071,38 @@ where
 
         self.update_store_snapshot();
 
-        if let Some(pending_block) = self.delayed_until_blobs.get(&block_root) {
-            self.retry_block(wait_group.clone(), pending_block.clone());
+        let is_forward_synced = self.store.is_forward_synced();
+        let slot = data_column_sidecar.slot();
+        let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
+        let sampling_columns_count = self.store.sampling_columns_count();
+        let number_of_columns = self.store.chain_config().number_of_columns();
+        let is_ready_to_retry_block = if is_forward_synced {
+            if sampling_columns_count * 2 >= number_of_columns {
+                accepted_data_columns * 2 >= number_of_columns
+            } else {
+                accepted_data_columns == sampling_columns_count
+            }
+        } else {
+            accepted_data_columns * 2 >= sampling_columns_count
+        };
+
+        debug!(
+            "accepted data column sidecar (index: {}, slot: {slot}, count: {accepted_data_columns})",
+            data_column_sidecar.index,
+        );
+        if is_ready_to_retry_block {
+            if let Some(pending_block) = self.take_delayed_until_blobs(block_root) {
+                self.retry_block(wait_group.clone(), pending_block);
+            }
         }
 
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
         if !self.storage.prune_storage_enabled()
-            && self.store.unpersisted_data_column_sidecars().count()
-                >= self.store.chain_config().number_of_columns()
+            && (is_forward_synced
+                || self.store.unpersisted_data_column_sidecars().count()
+                    >= MAX_COLUMNS_COUNT_TO_PERSIST)
         {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
@@ -2364,6 +2415,21 @@ where
             .push(pending_blob_sidecar);
     }
 
+    fn has_delay_data_column_sidecar_until_parent(
+        &self,
+        parent_root: H256,
+        column_index: ColumnIndex,
+    ) -> bool {
+        self.delayed_until_block
+            .get(&parent_root)
+            .map_or(false, |entry| {
+                entry
+                    .data_column_sidecars
+                    .iter()
+                    .any(|pending| pending.data_column_sidecar.index == column_index)
+            })
+    }
+
     fn delay_data_column_sidecar_until_parent(
         &mut self,
         pending_data_column_sidecar: PendingDataColumnSidecar<P>,
@@ -2379,6 +2445,19 @@ where
             .or_default()
             .data_column_sidecars
             .push(pending_data_column_sidecar);
+    }
+
+    fn has_delay_data_column_sidecar_until_slot(
+        &self,
+        slot: Slot,
+        column_index: ColumnIndex,
+    ) -> bool {
+        self.delayed_until_slot.get(&slot).map_or(false, |entry| {
+            entry
+                .data_column_sidecars
+                .iter()
+                .any(|pending| pending.data_column_sidecar.index == column_index)
+        })
     }
 
     fn delay_data_column_sidecar_until_slot(
