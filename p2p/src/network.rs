@@ -376,16 +376,10 @@ impl<P: Preset> Network<P> {
                                 );
                             }
                         }
-                        P2pMessage::DataColumnsNeeded(identifiers, slot, peer_id) => {
-                            if let Some(peer_id) = peer_id {
-                                debug!("data columns needed: {identifiers:?} from {peer_id}");
-                            } else {
-                                debug!("data columns needed: {identifiers:?}");
-                            }
+                        P2pMessage::DataColumnsNeeded(identifiers, slot) => {
+                            debug!("data columns needed: {identifiers:?}");
 
-                            let peer_id = self.ensure_peer_connected(peer_id);
-
-                            P2pToSync::DataColumnsNeeded(identifiers, slot, peer_id)
+                            P2pToSync::DataColumnsNeeded(identifiers, slot)
                                 .send(&self.channels.p2p_to_sync_tx);
                         }
                         P2pMessage::DataColumnReconstructed(data_column_sidecars) => {
@@ -929,6 +923,7 @@ impl<P: Preset> Network<P> {
             }
             NetworkEvent::RPCFailed { peer_id, id, error } => {
                 debug!("request_id: {id:?} to peer {peer_id} failed: {error}");
+
                 P2pToSync::RequestFailed(peer_id).send(&self.channels.p2p_to_sync_tx);
             }
             NetworkEvent::RequestReceived {

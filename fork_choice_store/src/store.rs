@@ -1166,8 +1166,9 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
                 let missing_indices = self.indices_of_missing_data_columns(block);
                 let number_of_columns = self.chain_config.number_of_columns();
                 if !missing_indices.is_empty()
-                    && (self.sampling_columns_count() * 2 < number_of_columns
-                        || missing_indices.len() * 2 >= number_of_columns)
+                    && (!self.is_forward_synced()
+                        || (self.sampling_columns_count() * 2 < number_of_columns
+                            || missing_indices.len() * 2 >= number_of_columns))
                 {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
                 }
@@ -1996,7 +1997,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     pub fn validate_data_column_sidecar_with_state(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
-        _block_seen: bool,
+        block_seen: bool,
         origin: &DataColumnSidecarOrigin,
         parent_info: impl FnOnce() -> Option<(Arc<SignedBeaconBlock<P>>, PayloadStatus)>,
         state_fn: impl FnOnce() -> Result<Arc<BeaconState<P>>>,
@@ -2046,11 +2047,13 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         }
 
         // [IGNORE] The sidecar is the first sidecar for the tuple (block_header.slot, block_header.proposer_index, sidecar.index) with valid header signature, sidecar inclusion proof, and kzg proof.
+        // Adjustment: Ignore data column sidecars for unseen blocks only
         if self.accepted_data_column_sidecars.contains_key(&(
             block_header.slot,
             block_header.proposer_index,
             data_column_sidecar.index,
-        )) {
+        )) && !block_seen
+        {
             return Ok(DataColumnSidecarAction::Ignore(true));
         }
 
@@ -2089,7 +2092,8 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             },
         );
 
-        // [IGNORE] The sidecar's block's parent (defined by block_header.parent_root) has been seen (via both gossip and non-gossip sources) (a client MAY queue sidecars for processing once the parent block is retrieved).
+        // [IGNORE] The sidecar's block's parent (defined by block_header.parent_root) has been seen (via both gossip and non-gossip sources)
+        // (a client MAY queue sidecars for processing once the parent block is retrieved).
         let Some((parent, parent_payload_status)) = parent_info() else {
             return Ok(DataColumnSidecarAction::DelayUntilParent(
                 data_column_sidecar,
@@ -2551,6 +2555,13 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         commitments.insert(block_root, data_sidecar.kzg_commitments.clone());
 
         self.data_column_cache.insert(data_sidecar);
+    }
+
+    pub fn accepted_data_column_sidecars_at_slot(&self, slot: Slot) -> usize {
+        self.accepted_data_column_sidecars
+            .keys()
+            .filter(|(s, _, _)| *s == slot)
+            .count()
     }
 
     fn insert_block(&mut self, chain_link: ChainLink<P>) -> Result<()> {
@@ -3588,12 +3599,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             return vec![];
         };
 
-        if !self
-            .chain_config
-            .phase_at_slot::<P>(block.slot())
-            .is_peerdas_activated()
-            || body.blob_kzg_commitments().is_empty()
-        {
+        if body.blob_kzg_commitments().is_empty() {
             return vec![];
         }
 
