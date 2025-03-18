@@ -63,6 +63,7 @@ const MAX_SYNC_DISTANCE_IN_SLOTS: u64 = 10000;
 const NOT_ENOUGH_PEERS_MESSAGE_COOLDOWN: Duration = Duration::from_secs(10);
 const PEER_UPDATE_COOLDOWN_IN_SECONDS: u64 = 12;
 const SEQUENTIAL_REDOWNLOADS_TILL_RESET: usize = 5;
+const MAX_SYNC_BATCHES: usize = 10;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum SyncTarget {
@@ -616,7 +617,7 @@ impl SyncManager {
             });
 
             // TODO(feature/fulu): review this max requests cap
-            if sync_batches.len() >= peers_to_sync.len() / 2 {
+            if sync_batches.len() >= MAX_SYNC_BATCHES.min(peers_to_sync.len() / 2) {
                 break;
             }
         }
