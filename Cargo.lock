@@ -2339,6 +2339,7 @@ dependencies = [
  "kzg_utils",
  "num-traits",
  "prometheus_metrics",
+ "rayon",
  "serde",
  "sha2 0.10.8",
  "spec_test_utils",

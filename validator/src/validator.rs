@@ -928,7 +928,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                     .is_peerdas_activated()
                 {
                     let cells_and_kzg_proofs =
-                        eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+                        eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.as_ref())?;
                     for data_column_sidecar in eip_7594::construct_data_column_sidecars(
                         &block,
                         &cells_and_kzg_proofs,
