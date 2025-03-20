@@ -7,6 +7,10 @@ use kzg_utils::eip_7594::{
     compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs, verify_cell_kzg_proof_batch,
 };
 use num_traits::One as _;
+use rayon::iter::{
+    IndexedParallelIterator as _, IntoParallelIterator as _, IntoParallelRefIterator,
+    ParallelIterator as _,
+};
 use sha2::{Digest as _, Sha256};
 use ssz::{ByteVector, ContiguousList, ContiguousVector, SszHash as _, Uint256};
 use try_from_iterator::TryFromIterator as _;
@@ -222,22 +226,30 @@ pub fn verify_sidecar_inclusion_proof<P: Preset>(
  *
  * This helper demonstrates the relationship between blobs and the matrix of cells/proofs.
  */
-pub fn compute_matrix<P: Preset>(blobs: impl Iterator<Item = Blob<P>>) -> Result<Vec<MatrixEntry>> {
-    let mut matrix = vec![];
-    for (blob_index, blob) in blobs.enumerate() {
-        let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(&blob)?;
-        for (cell_index, (cell, kzg_proof)) in cells.into_iter().zip(proofs.into_iter()).enumerate()
-        {
-            matrix.push(MatrixEntry {
-                cell: try_convert_to_cell(cell)?,
-                kzg_proof,
-                row_index: blob_index as u64,
-                column_index: cell_index as u64,
-            });
-        }
-    }
+pub fn compute_matrix<P: Preset>(blobs: &[Blob<P>]) -> Result<Vec<MatrixEntry>> {
+    let all_matrix = blobs
+        .par_iter()
+        .enumerate()
+        .map(|(blob_index, blob)| {
+            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(blob)?;
+            cells
+                .into_iter()
+                .zip(proofs)
+                .enumerate()
+                .map(move |(cell_index, (cell, kzg_proof))| {
+                    Ok(MatrixEntry {
+                        cell: try_convert_to_cell(cell)?,
+                        kzg_proof,
+                        row_index: blob_index as u64,
+                        column_index: cell_index as u64,
+                    })
+                })
+                .collect::<Result<Vec<MatrixEntry>>>()
+        })
+        .collect::<Result<Vec<Vec<MatrixEntry>>>>();
 
-    Ok(matrix)
+    // itertools::process_results(all_matrix.into_iter(), |i| i.flatten().collect())
+    all_matrix.map(|matrix| matrix.into_iter().flatten().collect())
 }
 
 /**
@@ -254,32 +266,36 @@ pub fn recover_matrix(
         .get()
         .map(|metrics| metrics.columns_reconstruction_time.start_timer());
 
-    let mut matrix = vec![];
-    for blob_index in 0..blob_count {
-        let (cell_indices, cells): (Vec<_>, Vec<_>) = partial_matrix
-            .iter()
-            .filter(|&e| (e.row_index == blob_index as u64))
-            .map(|e| (e.column_index, &e.cell))
-            .unzip();
+    let matrix = (0..blob_count)
+        .into_par_iter()
+        .map(|blob_index| {
+            let (cell_indices, cells): (Vec<_>, Vec<_>) = partial_matrix
+                .iter()
+                .filter_map(|e| {
+                    (e.row_index == blob_index as u64).then_some((e.column_index, &e.cell))
+                })
+                .unzip();
 
-        let (recovered_cells, recovered_proofs) =
-            recover_cells_and_kzg_proofs(cell_indices, cells)?;
+            let (recovered_cells, recovered_proofs) =
+                recover_cells_and_kzg_proofs(cell_indices, cells)?;
 
-        for (cell_index, (cell, proof)) in recovered_cells
-            .into_iter()
-            .zip(recovered_proofs.into_iter())
-            .enumerate()
-        {
-            matrix.push(MatrixEntry {
-                cell: try_convert_to_cell(cell)?,
-                kzg_proof: proof,
-                row_index: blob_index as u64,
-                column_index: cell_index as u64,
-            });
-        }
-    }
+            recovered_cells
+                .into_iter()
+                .zip(recovered_proofs)
+                .enumerate()
+                .map(move |(cell_index, (cell, proof))| {
+                    Ok(MatrixEntry {
+                        cell: try_convert_to_cell(cell)?,
+                        kzg_proof: proof,
+                        row_index: blob_index as u64,
+                        column_index: cell_index as u64,
+                    })
+                })
+                .collect::<Result<Vec<MatrixEntry>>>()
+        })
+        .collect::<Result<Vec<Vec<MatrixEntry>>>>();
 
-    Ok(matrix)
+    matrix.map(|matrix| matrix.into_iter().flatten().collect())
 }
 
 pub fn construct_data_column_sidecars<P: Preset>(
@@ -333,10 +349,11 @@ pub fn construct_data_column_sidecars<P: Preset>(
 }
 
 pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
-    blobs: impl Iterator<Item = Blob<P>>,
+    blobs: &[Blob<P>],
 ) -> Result<CellsAndKzgProofs> {
     let cells_and_kzg_proofs = blobs
-        .map(|blob| compute_cells_and_kzg_proofs::<P>(&blob))
+        .par_iter()
+        .map(|blob| compute_cells_and_kzg_proofs::<P>(blob))
         .collect::<Result<Vec<_>>>()?;
 
     let mut result = vec![];
