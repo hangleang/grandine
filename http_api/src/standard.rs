@@ -1136,7 +1136,7 @@ pub async fn publish_block<P: Preset, W: Wait>(
         .is_peerdas_activated()
     {
         let cells_and_kzg_proofs =
-            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.as_ref())?;
         let data_column_sidecars = eip_7594::construct_data_column_sidecars(
             &signed_beacon_block,
             &cells_and_kzg_proofs,
@@ -1200,9 +1200,8 @@ pub async fn publish_blinded_block<P: Preset, W: Wait>(
         .phase_at_slot::<P>(slot)
         .is_peerdas_activated()
     {
-        let cells_and_kzg_proofs = eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
-            blobs.unwrap_or_default().into_iter(),
-        )?;
+        let cells_and_kzg_proofs =
+            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.unwrap_or_default().as_ref())?;
         let data_column_sidecars = eip_7594::construct_data_column_sidecars(
             &signed_beacon_block,
             &cells_and_kzg_proofs,
@@ -1292,7 +1291,7 @@ pub async fn publish_block_v2<P: Preset, W: Wait>(
         .is_peerdas_activated()
     {
         let cells_and_kzg_proofs =
-            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.into_iter())?;
+            eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(blobs.as_ref())?;
         let data_column_sidecars = eip_7594::construct_data_column_sidecars(
             &signed_beacon_block,
             &cells_and_kzg_proofs,

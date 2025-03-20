@@ -12,6 +12,7 @@ helper_functions = { workspace = true }
 itertools = { workspace = true }
 kzg_utils = { workspace = true }
 num-traits = { workspace = true }
+rayon = { workspace = true }
 ssz = { workspace = true}
 sha2 = { workspace = true }
 thiserror = { workspace = true }

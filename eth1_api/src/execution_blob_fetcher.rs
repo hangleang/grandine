@@ -102,7 +102,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
 
                         if blobs_in_mempool.len() == missing_blob_indices.len() {
                             match eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
-                                blobs_in_mempool.into_iter(),
+                                &blobs_in_mempool,
                             ) {
                                 Ok(cells_and_kzg_proofs) => {
                                     match eip_7594::construct_data_column_sidecars(
