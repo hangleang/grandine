@@ -1,8 +1,9 @@
 #![expect(clippy::string_slice)]
 
+use crate::eip_7594::try_convert_to_cell;
+
 use serde::Deserialize;
-use typenum::Unsigned as _;
-use types::{deneb::primitives::KzgProof, fulu::consts::BytesPerCell};
+use types::{deneb::primitives::KzgProof, fulu::primitives::Cell, preset::Preset};
 
 #[derive(Deserialize)]
 pub struct Input {
@@ -16,14 +17,14 @@ pub struct Test {
 }
 
 impl Test {
-    pub fn get_output(&self) -> Option<(Vec<[u8; BytesPerCell::USIZE]>, Vec<KzgProof>)> {
+    pub fn get_output<P: Preset>(&self) -> Option<(Vec<Cell<P>>, Vec<KzgProof>)> {
         self.output.as_ref().map(|(cells_str, proofs_str)| {
             let cells = cells_str
                 .iter()
                 .map(|cell| {
                     let bytes = hex::decode(&cell[2..]).expect("should decode cell bytes");
-                    bytes
-                        .try_into()
+
+                    try_convert_to_cell::<P>(bytes)
                         .expect("test output cell bytes should fit into BYTES_PER_CELL bytes")
                 })
                 .collect::<Vec<_>>();

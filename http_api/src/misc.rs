@@ -14,7 +14,7 @@ use types::{
     combined::{BeaconBlock, SignedBeaconBlock},
     deneb::{
         containers::SignedBeaconBlock as DenebSignedBeaconBlock,
-        primitives::{Blob, KzgProof},
+        primitives::{Blob, KzgProofs},
     },
     electra::containers::SignedBeaconBlock as ElectraSignedBeaconBlock,
     fulu::containers::SignedBeaconBlock as FuluSignedBeaconBlock,
@@ -60,7 +60,7 @@ impl SyncedStatus {
 
 pub type SignedBeaconBlockWithBlobsAndProofs<P> = (
     SignedBeaconBlock<P>,
-    ContiguousList<KzgProof, <P as Preset>::MaxBlobCommitmentsPerBlock>,
+    KzgProofs<P>,
     ContiguousList<Blob<P>, <P as Preset>::MaxBlobCommitmentsPerBlock>,
 );
 
@@ -68,7 +68,7 @@ pub type SignedBeaconBlockWithBlobsAndProofs<P> = (
 #[serde(bound = "")]
 pub struct SignedDenebBlockWithBlobs<P: Preset> {
     pub signed_block: DenebSignedBeaconBlock<P>,
-    pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_proofs: KzgProofs<P>,
     pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
 }
 
@@ -76,7 +76,7 @@ pub struct SignedDenebBlockWithBlobs<P: Preset> {
 #[serde(bound = "")]
 pub struct SignedElectraBlockWithBlobs<P: Preset> {
     pub signed_block: ElectraSignedBeaconBlock<P>,
-    pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_proofs: KzgProofs<P>,
     pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
 }
 
@@ -84,7 +84,7 @@ pub struct SignedElectraBlockWithBlobs<P: Preset> {
 #[serde(bound = "")]
 pub struct SignedFuluBlockWithBlobs<P: Preset> {
     pub signed_block: FuluSignedBeaconBlock<P>,
-    pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_proofs: KzgProofs<P>,
     pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
 }
 
@@ -93,7 +93,7 @@ pub struct SignedFuluBlockWithBlobs<P: Preset> {
 #[ssz(derive_read = false, derive_hash = false)]
 pub struct BlockWithBlobs<B: Serialize + SszWrite, P: Preset> {
     pub block: B,
-    pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
+    pub kzg_proofs: KzgProofs<P>,
     pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
 }
 

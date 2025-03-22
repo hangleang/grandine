@@ -11,6 +11,7 @@ use allocator as _;
 use anyhow::Result;
 use clock::Tick;
 use criterion::{BatchSize, Criterion, Throughput};
+use dashmap::DashMap;
 use easy_ext::ext;
 use eth2_cache_utils::holesky::{self, CAPELLA_BEACON_STATE};
 use execution_engine::NullExecutionEngine;
@@ -70,6 +71,7 @@ impl Criterion {
                     anchor_state,
                     false,
                     false,
+                    Arc::new(DashMap::new()),
                 );
 
                 for slot in (anchor_slot + 1)..=last_attestation_slot {

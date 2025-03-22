@@ -20,6 +20,7 @@ use crate::tasks::DataColumnSidecarTask;
 use anyhow::{Context as _, Result};
 use arc_swap::{ArcSwap, Guard};
 use clock::Tick;
+use dashmap::DashMap;
 use eth2_libp2p::{GossipId, PeerId};
 use execution_engine::{ExecutionEngine, PayloadStatusV1};
 use fork_choice_store::{
@@ -31,6 +32,7 @@ use futures::channel::{mpsc::Sender as MultiSender, oneshot::Sender as OneshotSe
 use genesis::AnchorCheckpointProvider;
 use http_api_utils::EventChannels;
 use prometheus_metrics::Metrics;
+use ssz::H256;
 use std_ext::ArcExt as _;
 use thiserror::Error;
 use types::{
@@ -111,6 +113,7 @@ where
         storage: Arc<Storage<P>>,
         unfinalized_blocks: impl DoubleEndedIterator<Item = Result<Arc<SignedBeaconBlock<P>>>>,
         finished_back_sync: bool,
+        sidecars_construction_started: Arc<DashMap<H256, Slot>>,
     ) -> Result<(Arc<Self>, MutatorHandle<P, W>)> {
         let finished_initial_forward_sync = anchor_block.message().slot() >= tick.slot;
 
@@ -121,6 +124,7 @@ where
             anchor_state,
             finished_initial_forward_sync,
             finished_back_sync,
+            sidecars_construction_started,
         );
 
         store.apply_tick(tick)?;

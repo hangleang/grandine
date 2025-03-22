@@ -4,17 +4,20 @@ use anyhow::Result;
 use dashmap::DashMap;
 use derive_more::derive::Constructor;
 use eth2_libp2p::PeerId;
-use execution_engine::BlobAndProofV1;
+use execution_engine::{BlobAndProofV1, BlobAndProofV2, EngineGetBlobsParams};
 use fork_choice_control::Wait;
 use futures::{
     channel::mpsc::{UnboundedReceiver, UnboundedSender},
     StreamExt as _,
 };
 use helper_functions::misc;
+use itertools::Itertools as _;
 use log::{debug, warn};
+use ssz::H256;
 use types::{
     combined::SignedBeaconBlock,
     deneb::{containers::BlobIdentifier, primitives::BlobIndex},
+    fulu::containers::DataColumnIdentifier,
     phase0::primitives::Slot,
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -30,6 +33,8 @@ pub struct ExecutionBlobFetcher<P: Preset, W: Wait> {
     api: Arc<Eth1Api>,
     controller: ApiController<P, W>,
     received_blob_sidecars: Arc<DashMap<BlobIdentifier, Slot>>,
+    received_data_column_sidecars: Arc<DashMap<DataColumnIdentifier, Slot>>,
+    sidecars_construction_started: Arc<DashMap<H256, Slot>>,
     p2p_tx: UnboundedSender<BlobFetcherToP2p>,
     rx: UnboundedReceiver<Eth1ApiToBlobFetcher<P>>,
 }
@@ -40,25 +45,30 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
             match message {
                 Eth1ApiToBlobFetcher::GetBlobs {
                     block,
-                    blob_identifiers,
+                    params,
                     peer_id,
-                } => {
-                    self.get_blobs(block, blob_identifiers, peer_id).await;
-                }
+                } => match params {
+                    EngineGetBlobsParams::Blobs(blob_identifiers) => {
+                        self.get_blobs_v1(block, blob_identifiers, peer_id).await
+                    }
+                    EngineGetBlobsParams::DataColumns(identifiers) => {
+                        self.get_blobs_v2(block, identifiers, peer_id).await
+                    }
+                },
             }
         }
 
         Ok(())
     }
 
-    #[expect(clippy::too_many_lines)]
-    async fn get_blobs(
+    async fn get_blobs_v1(
         &self,
         block: Arc<SignedBeaconBlock<P>>,
         blob_identifiers: Vec<BlobIdentifier>,
         peer_id: Option<PeerId>,
     ) {
         let slot = block.message().slot();
+        let block_root = block.message().hash_tree_root();
 
         if let Some(body) = block.message().body().post_deneb() {
             let missing_blob_indices = blob_identifiers
@@ -87,58 +97,17 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 .map(|(commitment, _)| misc::kzg_commitment_to_versioned_hash(*commitment))
                 .collect();
 
-            let mut blob_sidecars = vec![];
-            let block_root = block.message().hash_tree_root();
+            // TODO(feature/fulu): review on the eth1 request limit, maybe delay between requests
+            //
+            // Request `engine_getBlobsV1` once per block to avoid exhausting EL
+            if !self.sidecars_construction_started.contains_key(&block_root) {
+                let mut blob_sidecars = vec![];
 
-            match self.api.get_blobs::<P>(versioned_hashes).await {
-                Ok(blobs_and_proofs) => {
-                    if block.phase().is_peerdas_activated() {
-                        let blobs_in_mempool = blobs_and_proofs
-                            .into_iter()
-                            .filter_map(|blob_and_proof| {
-                                blob_and_proof.map(|blob_and_proof| blob_and_proof.blob)
-                            })
-                            .collect::<Vec<_>>();
-
-                        if blobs_in_mempool.len() == missing_blob_indices.len() {
-                            match eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
-                                &blobs_in_mempool,
-                            ) {
-                                Ok(cells_and_kzg_proofs) => {
-                                    match eip_7594::construct_data_column_sidecars(
-                                        &block,
-                                        &cells_and_kzg_proofs,
-                                        self.controller.chain_config(),
-                                    ) {
-                                        Ok(data_column_sidecars) => {
-                                            debug!(
-                                                "received all blob sidecars from EL: slot: {slot}",
-                                            );
-                                            for blob_identifier in &blob_identifiers {
-                                                self.received_blob_sidecars
-                                                    .insert(*blob_identifier, slot);
-                                            }
-
-                                            for data_column_sidecar in data_column_sidecars {
-                                                self.controller.on_el_data_column_sidecar(
-                                                    Arc::new(data_column_sidecar),
-                                                );
-                                            }
-                                        }
-                                        Err(error) => warn!(
-                                            "failed to construct data column sidecars with \
-                                            cells and kzg proofs: {error:?}"
-                                        ),
-                                    }
-                                }
-                                Err(error) => warn!(
-                                    "failed to convert blobs received from execution layer \
-                                    into cells and kzg proofs: {error:?}"
-                                ),
-                            }
-                        }
-                    } else {
+                match self.api.get_blobs_v1::<P>(versioned_hashes).await {
+                    Ok(blobs_and_proofs) => {
                         let block_header = block.to_header();
+
+                        self.sidecars_construction_started.insert(block_root, slot);
 
                         for (blob_and_proof, kzg_commitment, index) in blobs_and_proofs
                             .into_iter()
@@ -184,27 +153,140 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                             }
                         }
                     }
+                    Err(error) => warn!("engine_getBlobsV1 call failed: {error}"),
                 }
-                Err(error) => warn!("engine_getBlobsV1 call failed: {error}"),
-            }
 
-            if !block.phase().is_peerdas_activated() {
                 for blob_sidecar in blob_sidecars {
                     self.controller.on_el_blob_sidecar(blob_sidecar);
                 }
+            }
 
-                // Request remaining missing blob sidecars from P2P
-                let missing_blob_identifiers = blob_identifiers
-                    .into_iter()
-                    .filter(|identifier| !self.received_blob_sidecars.contains_key(identifier))
-                    .collect::<Vec<_>>();
+            // Request remaining missing blob sidecars from P2P
+            let missing_blob_identifiers = missing_blob_indices
+                .into_iter()
+                .map(|index| BlobIdentifier { block_root, index })
+                .filter(|identifier| !self.received_blob_sidecars.contains_key(identifier))
+                .collect::<Vec<_>>();
 
-                debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
+            debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
 
-                if !missing_blob_identifiers.is_empty() {
-                    BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
-                        .send(&self.p2p_tx);
+            if !missing_blob_identifiers.is_empty() {
+                BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
+                    .send(&self.p2p_tx);
+            }
+        }
+    }
+
+    async fn get_blobs_v2(
+        &self,
+        block: Arc<SignedBeaconBlock<P>>,
+        data_column_identifiers: Vec<DataColumnIdentifier>,
+        _peer_id: Option<PeerId>,
+    ) {
+        let slot = block.message().slot();
+        let block_root = block.message().hash_tree_root();
+
+        if let Some(body) = block.message().body().post_deneb() {
+            let versioned_hashes = body
+                .blob_kzg_commitments()
+                .iter()
+                .copied()
+                .map(misc::kzg_commitment_to_versioned_hash)
+                .collect::<Vec<_>>();
+            let expected_blob_count = versioned_hashes.len();
+
+            if !self.sidecars_construction_started.contains_key(&block_root) {
+                match self.api.get_blobs_v2::<P>(versioned_hashes).await {
+                    Ok(blobs_and_proofs) => {
+                        // TODO(feature/fulu): use EL constructed `cells_proofs` with extended `cells`
+                        // from `compute_cells` method once it is implemented, because it is cheaper
+                        // than computing cells and cells_proofs in CL alone, so faster time to
+                        // construct data column sidecars.
+                        let (received_blobs, _cells_proofs): (Vec<_>, Vec<_>) = blobs_and_proofs
+                            .into_iter()
+                            .filter_map(|blob_and_proof| {
+                                blob_and_proof.map(|BlobAndProofV2 { blob, proofs }| (blob, proofs))
+                            })
+                            .unzip();
+
+                        if received_blobs.len() == expected_blob_count {
+                            debug!("received all blob sidecars from EL at slot: {slot}");
+
+                            match eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
+                                &received_blobs,
+                            ) {
+                                Ok(cells_and_kzg_proofs) => {
+                                    match eip_7594::construct_data_column_sidecars(
+                                        &block,
+                                        &cells_and_kzg_proofs,
+                                        self.controller.chain_config(),
+                                    ) {
+                                        Ok(data_columns) => {
+                                            self.sidecars_construction_started
+                                                .insert(block_root, slot);
+
+                                            let mut sampling_columns =
+                                                self.controller.sampling_columns().into_iter();
+
+                                            for data_column_sidecar in
+                                                data_columns.into_iter().filter(|column| {
+                                                    sampling_columns.contains(&column.index)
+                                                })
+                                            {
+                                                let data_column_identifier = DataColumnIdentifier {
+                                                    block_root,
+                                                    index: data_column_sidecar.index,
+                                                };
+
+                                                if self
+                                                    .received_data_column_sidecars
+                                                    .insert(data_column_identifier, slot)
+                                                    .is_none()
+                                                {
+                                                    self.controller.on_el_data_column_sidecar(
+                                                        Arc::new(data_column_sidecar),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(error) => warn!(
+                                            "failed to construct data column sidecars with \
+                                            cells and kzg proofs: {error:?}"
+                                        ),
+                                    }
+                                }
+                                Err(error) => warn!(
+                                    "failed to convert blobs received from execution layer \
+                                    into cells and kzg proofs: {error:?}"
+                                ),
+                            }
+                        } else {
+                            debug!(
+                                "received blobs less than expected from EL at slot: {slot} \
+                                 expected: {}, got: {}",
+                                expected_blob_count,
+                                received_blobs.len(),
+                            );
+                        }
+                    }
+                    Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),
                 }
+            }
+
+            // Request remaining missing data column sidecars from P2P
+            let missing_data_column_identifiers = data_column_identifiers
+                .into_iter()
+                .filter(|identifier| !self.received_data_column_sidecars.contains_key(identifier))
+                .collect::<Vec<_>>();
+
+            debug!(
+                "missing data columns sidecars after fetching from EL: [{}] at block {block_root}",
+                missing_data_column_identifiers.iter().map(|id| id.index).join(", "),
+            );
+
+            if !missing_data_column_identifiers.is_empty() {
+                BlobFetcherToP2p::DataColumnsNeeded(missing_data_column_identifiers, slot)
+                    .send(&self.p2p_tx);
             }
         }
     }

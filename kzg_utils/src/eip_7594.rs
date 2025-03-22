@@ -4,22 +4,20 @@ use kzg::eth::eip_7594::{
     verify_cell_kzg_proof_batch_raw,
 };
 use rust_kzg_blst::eip_7594::BlstBackend;
-use typenum::Unsigned as _;
+use ssz::{ByteVector, ContiguousVector};
+use try_from_iterator::TryFromIterator as _;
 use types::{
     deneb::primitives::{Blob, KzgCommitment, KzgProof},
-    fulu::{
-        consts::BytesPerCell,
-        primitives::{Cell, CellIndex},
-    },
+    fulu::primitives::{Cell, CellIndex},
     preset::Preset,
 };
 
 use crate::{error::KzgError, trusted_setup};
 
-pub fn verify_cell_kzg_proof_batch<'a>(
+pub fn verify_cell_kzg_proof_batch<'a, P: Preset>(
     commitments: impl IntoIterator<Item = &'a KzgCommitment>,
     cell_indices: impl IntoIterator<Item = CellIndex>,
-    cells: impl IntoIterator<Item = &'a Cell>,
+    cells: impl IntoIterator<Item = &'a Cell<P>>,
     proofs: impl IntoIterator<Item = &'a KzgProof>,
 ) -> Result<bool> {
     let raw_commitments = commitments
@@ -56,7 +54,7 @@ pub fn verify_cell_kzg_proof_batch<'a>(
 pub fn compute_cells_and_kzg_proofs<P: Preset>(
     blob: &Blob<P>,
 ) -> Result<(
-    impl IntoIterator<Item = [u8; BytesPerCell::USIZE]>,
+    impl IntoIterator<Item = Cell<P>>,
     impl IntoIterator<Item = KzgProof>,
 )> {
     let raw_blob = blob.as_bytes().try_into()?;
@@ -64,15 +62,19 @@ pub fn compute_cells_and_kzg_proofs<P: Preset>(
     let (cells, proofs) =
         compute_cells_and_kzg_proofs_raw::<BlstBackend>(raw_blob, trusted_setup::blst_settings())
             .map_err(KzgError::KzgError)?;
+    let cells = cells
+        .into_iter()
+        .map(try_convert_to_cell::<P>)
+        .collect::<Result<Vec<_>>>()?;
 
     Ok((cells, proofs.into_iter().map(Into::into)))
 }
 
-pub fn recover_cells_and_kzg_proofs<'cell>(
+pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
     cell_indices: impl IntoIterator<Item = CellIndex>,
-    cells: impl IntoIterator<Item = &'cell Cell>,
+    cells: impl IntoIterator<Item = &'cell Cell<P>>,
 ) -> Result<(
-    impl IntoIterator<Item = [u8; BytesPerCell::USIZE]>,
+    impl IntoIterator<Item = Cell<P>>,
     impl IntoIterator<Item = KzgProof>,
 )> {
     let cell_indices = cell_indices
@@ -92,5 +94,19 @@ pub fn recover_cells_and_kzg_proofs<'cell>(
     )
     .map_err(KzgError::KzgError)?;
 
+    let cells = cells
+        .into_iter()
+        .map(try_convert_to_cell::<P>)
+        .collect::<Result<Vec<_>>>()?;
+
     Ok((cells, proofs.into_iter().map(Into::into)))
+}
+
+pub(crate) fn try_convert_to_cell<P: Preset>(
+    cell: impl IntoIterator<Item = u8>,
+) -> Result<Cell<P>> {
+    ContiguousVector::try_from_iter(cell)
+        .map(ByteVector::from)
+        .map(Cell::<P>::from)
+        .map_err(Into::into)
 }

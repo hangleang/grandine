@@ -1157,7 +1157,7 @@ impl<P: Preset> ExecutionPayload<P> {
             (self, phase),
             (Self::Bellatrix(_), Phase::Bellatrix)
                 | (Self::Capella(_), Phase::Capella)
-                | (Self::Deneb(_), Phase::Deneb | Phase::Electra)
+                | (Self::Deneb(_), Phase::Deneb | Phase::Electra | Phase::Fulu)
         )
     }
 

@@ -391,47 +391,40 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
             metrics,
         } = self;
 
-        if !store_snapshot.is_data_column_sidecar_republished(
-            data_column_sidecar.slot(),
-            data_column_sidecar.index,
-        ) {
-            let _data_column_sidecar_verification_timer = metrics
-                .as_ref()
-                .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
+        let block_root = data_column_sidecar
+            .signed_block_header
+            .message
+            .hash_tree_root();
 
-            let _timer = metrics
-                .as_ref()
-                .map(|metrics| metrics.fc_data_column_sidecar_task_times.start_timer());
+        let _data_column_sidecar_verification_timer = metrics
+            .as_ref()
+            .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
 
-            let block_root = data_column_sidecar
-                .signed_block_header
-                .message
-                .hash_tree_root();
-            let index = data_column_sidecar.index;
-            let data_column_identifier = DataColumnIdentifier { block_root, index };
+        let _timer = metrics
+            .as_ref()
+            .map(|metrics| metrics.fc_data_column_sidecar_task_times.start_timer());
 
-            let result = store_snapshot.validate_data_column_sidecar(
-                data_column_sidecar,
-                block_seen,
-                &origin,
-            );
+        let index = data_column_sidecar.index;
+        let data_column_identifier = DataColumnIdentifier { block_root, index };
 
-            if let Ok(DataColumnSidecarAction::Accept(_)) = result {
-                if let Some(metrics) = metrics.as_ref() {
-                    metrics.verified_gossip_data_column_sidecar.inc();
-                }
+        let result =
+            store_snapshot.validate_data_column_sidecar(data_column_sidecar, block_seen, &origin);
+
+        if let Ok(DataColumnSidecarAction::Accept(_)) = result {
+            if let Some(metrics) = metrics.as_ref() {
+                metrics.verified_gossip_data_column_sidecar.inc();
             }
-
-            MutatorMessage::DataColumnSidecar {
-                wait_group,
-                result,
-                origin,
-                data_column_identifier,
-                block_seen,
-                submission_time,
-            }
-            .send(&mutator_tx);
         }
+
+        MutatorMessage::DataColumnSidecar {
+            wait_group,
+            result,
+            origin,
+            data_column_identifier,
+            block_seen,
+            submission_time,
+        }
+        .send(&mutator_tx);
     }
 }
 
@@ -519,7 +512,6 @@ pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
     pub block: Arc<SignedBeaconBlock<P>>,
-    pub blob_count: usize,
 }
 
 impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
@@ -528,29 +520,32 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
             store_snapshot,
             mutator_tx,
             block,
-            blob_count,
         } = self;
 
-        let block_root = block.message().hash_tree_root();
-        let available_columns = store_snapshot.available_columns_at_block(block_root);
+        if let Some(body) = block.message().body().post_deneb() {
+            let block_root = block.message().hash_tree_root();
+            let available_columns = store_snapshot.available_columns_at_block(block_root);
 
-        if available_columns.len() < store_snapshot.sampling_columns_count() {
-            let partial_matrix = available_columns
-                .into_iter()
-                .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
-                .collect::<Vec<_>>();
+            // Final check to avoid unnecessary computation
+            if available_columns.len() < store_snapshot.sampling_columns_count() {
+                let blob_count = body.blob_kzg_commitments().len();
+                let partial_matrix = available_columns
+                    .into_iter()
+                    .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
+                    .collect::<Vec<_>>();
 
-            match eip_7594::recover_matrix(&partial_matrix, blob_count) {
-                Ok(full_matrix) => {
-                    MutatorMessage::ReconstructedMissingColumns {
-                        block,
-                        blob_count,
-                        full_matrix,
+                match eip_7594::recover_matrix(&partial_matrix, blob_count) {
+                    Ok(full_matrix) => {
+                        MutatorMessage::ReconstructedMissingColumns {
+                            block,
+                            blob_count,
+                            full_matrix,
+                        }
+                        .send(&mutator_tx);
                     }
-                    .send(&mutator_tx);
-                }
-                Err(error) => {
-                    warn!("failed to reconstruct missing data column sidecars: {error:?}");
+                    Err(error) => {
+                        warn!("failed to reconstruct missing data column sidecars: {error:?}");
+                    }
                 }
             }
         }

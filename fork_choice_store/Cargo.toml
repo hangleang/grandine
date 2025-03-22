@@ -11,6 +11,7 @@ anyhow = { workspace = true }
 arithmetic = { workspace = true }
 clock = { workspace = true }
 crossbeam-skiplist = { workspace = true }
+dashmap = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 eip_7594 = { workspace = true }
