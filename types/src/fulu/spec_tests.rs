@@ -267,7 +267,7 @@ tests_for_type! {
 }
 
 tests_for_type! {
-    MatrixEntry,
+    MatrixEntry<_>,
     "consensus-spec-tests/tests/mainnet/fulu/ssz_static/MatrixEntry/*/*",
     "consensus-spec-tests/tests/minimal/fulu/ssz_static/MatrixEntry/*/*",
 }

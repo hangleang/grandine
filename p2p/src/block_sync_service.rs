@@ -82,8 +82,8 @@ pub struct BlockSyncService<P: Preset> {
     is_exiting: Arc<AtomicBool>,
     received_blob_sidecars: Arc<DashMap<BlobIdentifier, Slot>>,
     received_block_roots: HashMap<H256, Slot>,
+    received_data_column_sidecars: Arc<DashMap<DataColumnIdentifier, Slot>>,
     data_dumper: Arc<DataDumper>,
-    received_data_column_sidecars: HashMap<DataColumnIdentifier, Slot>,
     fork_choice_to_sync_rx: Option<UnboundedReceiver<SyncMessage<P>>>,
     p2p_to_sync_rx: UnboundedReceiver<P2pToSync<P>>,
     sync_to_p2p_tx: UnboundedSender<SyncToP2p>,
@@ -114,6 +114,7 @@ impl<P: Preset> BlockSyncService<P> {
         storage_mode: StorageMode,
         target_peers: usize,
         received_blob_sidecars: Arc<DashMap<BlobIdentifier, u64>>,
+        received_data_column_sidecars: Arc<DashMap<DataColumnIdentifier, Slot>>,
         data_dumper: Arc<DataDumper>,
     ) -> Result<Self> {
         let database;
@@ -215,8 +216,8 @@ impl<P: Preset> BlockSyncService<P> {
             is_exiting: Arc::new(AtomicBool::new(false)),
             received_blob_sidecars,
             received_block_roots: HashMap::new(),
+            received_data_column_sidecars,
             data_dumper,
-            received_data_column_sidecars: HashMap::new(),
             fork_choice_to_sync_rx,
             p2p_to_sync_rx,
             sync_to_p2p_tx,
@@ -1089,7 +1090,7 @@ impl<P: Preset> BlockSyncService<P> {
             if self.back_sync.is_some() {
                 self.received_block_roots = HashMap::new();
                 self.received_blob_sidecars.clear();
-                self.received_data_column_sidecars = HashMap::new();
+                self.received_data_column_sidecars.clear();
                 self.sync_direction = SyncDirection::Back;
                 self.sync_manager.cache_clear();
                 self.request_blobs_and_blocks_if_ready()?;
@@ -1122,7 +1123,7 @@ impl<P: Preset> BlockSyncService<P> {
     }
 
     fn register_new_received_data_column_sidecar(
-        &mut self,
+        &self,
         data_column_identifier: DataColumnIdentifier,
         slot: Slot,
     ) -> bool {

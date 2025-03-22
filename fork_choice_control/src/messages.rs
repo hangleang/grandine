@@ -174,7 +174,7 @@ pub enum MutatorMessage<P: Preset, W> {
     ReconstructedMissingColumns {
         block: Arc<SignedBeaconBlock<P>>,
         blob_count: usize,
-        full_matrix: Vec<MatrixEntry>,
+        full_matrix: Vec<MatrixEntry<P>>,
     },
 }
 
@@ -202,7 +202,6 @@ pub enum P2pMessage<P: Preset> {
     PenalizePeer(PeerId, MutatorRejectionReason),
     Reject(Option<GossipId>, MutatorRejectionReason),
     BlockNeeded(H256, Option<PeerId>),
-    DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot),
     DataColumnReconstructed(Vec<Arc<DataColumnSidecar<P>>>),
     FinalizedCheckpoint(Checkpoint),
     HeadState(#[cfg_attr(test, derivative(Debug = "ignore"))] Arc<BeaconState<P>>),

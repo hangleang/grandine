@@ -11,6 +11,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Result};
 use arithmetic::NonZeroExt as _;
 use clock::Tick;
+use dashmap::DashMap;
 use eip_7594::{verify_data_column_sidecar, verify_kzg_proofs, verify_sidecar_inclusion_proof};
 use execution_engine::ExecutionEngine;
 use features::Feature;
@@ -230,14 +231,13 @@ pub struct Store<P: Preset, S: Storage<P>> {
     finished_back_sync: bool,
     blacklisted_blocks: StdHashSet<H256>,
     sampling_columns: HashSet<ColumnIndex>,
-    data_column_sidecars_reconstruction: HashMap<Slot, bool>,
-    republished_data_column_sidecars: HashMap<(Slot, ColumnIndex), bool>,
+    sidecars_construction_started: Arc<DashMap<H256, Slot>>,
 }
 
 impl<P: Preset, S: Storage<P>> Store<P, S> {
     /// [`get_forkchoice_store`](https://github.com/ethereum/consensus-specs/blob/v1.3.0/specs/phase0/fork-choice.md#get_forkchoice_store)
-    #[expect(clippy::too_many_arguments)]
     #[must_use]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         chain_config: Arc<ChainConfig>,
         store_config: StoreConfig,
@@ -247,6 +247,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         finished_initial_forward_sync: bool,
         finished_back_sync: bool,
         blacklisted_blocks: StdHashSet<H256>,
+        sidecars_construction_started: Arc<DashMap<H256, Slot>>,
     ) -> Self {
         let block_root = anchor_block.message().hash_tree_root();
         let state_root = anchor_state.hash_tree_root();
@@ -314,8 +315,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             finished_back_sync,
             blacklisted_blocks,
             sampling_columns: HashSet::default(),
-            data_column_sidecars_reconstruction: HashMap::default(),
-            republished_data_column_sidecars: HashMap::default(),
+            sidecars_construction_started,
         }
     }
 
@@ -1165,10 +1165,14 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             if state.phase().is_peerdas_activated() {
                 let missing_indices = self.indices_of_missing_data_columns(block);
                 let number_of_columns = self.chain_config.number_of_columns();
+
+                // While syncing, require all custody columns plus extra sampling to be available,
+                // Otherwise, accept block if more than half of columns are available, the rest can
+                // be reconstruct later using `recover_matrix` method.
                 if !missing_indices.is_empty()
                     && (!self.is_forward_synced()
                         || (self.sampling_columns_count() * 2 < number_of_columns
-                            || missing_indices.len() * 2 >= number_of_columns))
+                            || missing_indices.len() * 2 > number_of_columns))
                 {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
                 }
@@ -2878,10 +2882,8 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
         self.accepted_data_column_sidecars
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
-        self.data_column_sidecars_reconstruction
-            .retain(|slot, _| finalized_slot <= *slot);
-        self.republished_data_column_sidecars
-            .retain(|(slot, _), _| finalized_slot <= *slot);
+        self.sidecars_construction_started
+            .retain(|_, slot| finalized_slot <= *slot);
         // TODO(feature/eip-7594):
         //
         // Data columns must be stored for much longer period than finalization.
@@ -3716,29 +3718,12 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .collect()
     }
 
-    pub fn is_data_column_sidecars_reconstructed(&self, slot: Slot) -> bool {
-        self.data_column_sidecars_reconstruction
-            .get(&slot)
-            .map_or(false, |v| *v)
+    pub fn is_sidecars_construction_started(&self, block_root: H256) -> bool {
+        self.sidecars_construction_started.contains_key(&block_root)
     }
 
-    pub fn mark_as_reconstructed(&mut self, slot: Slot) {
-        self.data_column_sidecars_reconstruction.insert(slot, true);
-    }
-
-    pub fn is_data_column_sidecar_republished(
-        &self,
-        slot: Slot,
-        column_index: ColumnIndex,
-    ) -> bool {
-        self.republished_data_column_sidecars
-            .get(&(slot, column_index))
-            .map_or(false, |v| *v)
-    }
-
-    pub fn mark_as_republished(&mut self, slot: Slot, column_index: ColumnIndex) {
-        self.republished_data_column_sidecars
-            .insert((slot, column_index), true);
+    pub fn mark_started_sidecars_construction(&self, block_root: H256, slot: Slot) {
+        self.sidecars_construction_started.insert(block_root, slot);
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

@@ -944,9 +944,7 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
                         let committee_index = attestation.data.index;
 
                         match operation_pools::convert_to_electra_attestation(attestation) {
-                            Ok(electra_attestation) => {
-                                Some((electra_attestation, committee_index))
-                            }
+                            Ok(electra_attestation) => Some((electra_attestation, committee_index)),
                             Err(error) => {
                                 warn!("unable to convert to electra attestation: {error:?}");
                                 None
