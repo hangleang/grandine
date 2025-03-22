@@ -151,7 +151,7 @@ pub struct SignedBlindedBeaconBlock<P: Preset> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize, Serialize, Ssz)]
-#[serde(deny_unknown_fields)]
+#[serde(bound = "", deny_unknown_fields)]
 pub struct DataColumnIdentifier {
     pub block_root: H256,
     #[serde(with = "serde_utils::string_or_native")]
@@ -163,7 +163,7 @@ pub struct DataColumnIdentifier {
 pub struct DataColumnSidecar<P: Preset> {
     #[serde(with = "serde_utils::string_or_native")]
     pub index: ColumnIndex,
-    pub column: ContiguousList<Cell, P::MaxBlobCommitmentsPerBlock>,
+    pub column: ContiguousList<Cell<P>, P::MaxBlobCommitmentsPerBlock>,
     pub kzg_commitments: ContiguousList<KzgCommitment, P::MaxBlobCommitmentsPerBlock>,
     pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
     pub signed_block_header: SignedBeaconBlockHeader,
@@ -171,9 +171,9 @@ pub struct DataColumnSidecar<P: Preset> {
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Debug, Deserialize, Serialize, Ssz)]
-#[serde(deny_unknown_fields)]
-pub struct MatrixEntry {
-    pub cell: Cell,
+#[serde(bound = "", deny_unknown_fields)]
+pub struct MatrixEntry<P: Preset> {
+    pub cell: Cell<P>,
     pub kzg_proof: KzgProof,
     #[serde(with = "serde_utils::string_or_native")]
     pub column_index: ColumnIndex,

@@ -245,6 +245,12 @@ impl<P: Preset> Network<P> {
                             P2pToSync::BlobsNeeded(identifiers, slot, peer_id)
                                 .send(&self.channels.p2p_to_sync_tx);
                         }
+                        BlobFetcherToP2p::DataColumnsNeeded(identifiers, slot) => {
+                            debug!("data columns needed: {identifiers:?}");
+
+                            P2pToSync::DataColumnsNeeded(identifiers, slot)
+                                .send(&self.channels.p2p_to_sync_tx);
+                        }
                     }
                 },
 
@@ -375,12 +381,6 @@ impl<P: Preset> Network<P> {
                                     mutator_rejection_reason,
                                 );
                             }
-                        }
-                        P2pMessage::DataColumnsNeeded(identifiers, slot) => {
-                            debug!("data columns needed: {identifiers:?}");
-
-                            P2pToSync::DataColumnsNeeded(identifiers, slot)
-                                .send(&self.channels.p2p_to_sync_tx);
                         }
                         P2pMessage::DataColumnReconstructed(data_column_sidecars) => {
                             for data_column_sidecar in data_column_sidecars {

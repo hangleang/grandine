@@ -23,7 +23,7 @@ use crate::{
     config::Config,
     deneb::{
         containers::{BlobIdentifier, BlobSidecar},
-        primitives::{Blob, KzgCommitment, KzgProof},
+        primitives::{Blob, KzgCommitment, KzgProofs},
     },
     electra::containers::ExecutionRequests,
     fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
@@ -317,7 +317,7 @@ pub struct TimedPowBlock {
 pub struct WithBlobsAndMev<T, P: Preset> {
     pub value: T,
     pub commitments: Option<ContiguousList<KzgCommitment, P::MaxBlobCommitmentsPerBlock>>,
-    pub proofs: Option<ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>>,
+    pub proofs: Option<KzgProofs<P>>,
     pub blobs: Option<ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>>,
     pub mev: Option<Wei>,
     pub execution_requests: Option<ExecutionRequests<P>>,

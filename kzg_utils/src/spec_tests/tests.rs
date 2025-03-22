@@ -275,7 +275,7 @@ fn test_compute_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    let (expected_cells, expected_proofs) = match test.get_output() {
+    let (expected_cells, expected_proofs) = match test.get_output::<Mainnet>() {
         Some(output) => output,
         None => {
             assert!(test.output.is_none());
@@ -305,7 +305,7 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         .cells
         .iter()
         .map(|cell| deserialize(cell))
-        .collect::<Result<Vec<Cell>, _>>()
+        .collect::<Result<Vec<Cell<Mainnet>>, _>>()
     {
         Ok(cells) => cells,
         Err(_) => {
@@ -314,7 +314,7 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    let (expected_cells, expected_proofs) = match test.get_output() {
+    let (expected_cells, expected_proofs) = match test.get_output::<Mainnet>() {
         Some(output) => output,
         None => {
             assert!(test.output.is_none());
@@ -322,7 +322,7 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    let result = recover_cells_and_kzg_proofs(cell_indices, cells.iter());
+    let result = recover_cells_and_kzg_proofs::<Mainnet>(cell_indices, cells.iter());
     match result {
         Ok((cells, proofs)) => {
             assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
@@ -382,7 +382,7 @@ fn test_verify_cell_kzg_proof_batch(case: Case) {
         }
     };
 
-    match verify_cell_kzg_proof_batch(&commitments, cell_indices, &cells, &proofs) {
+    match verify_cell_kzg_proof_batch::<Mainnet>(&commitments, cell_indices, &cells, &proofs) {
         Ok(output) => {
             let expected_output = test.output.expect("test output should exist");
             assert_eq!(output, expected_output);

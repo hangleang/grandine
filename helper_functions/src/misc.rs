@@ -732,7 +732,7 @@ pub fn data_column_serve_range_slot<P: Preset>(config: &Config, current_slot: Sl
 
 pub fn compute_matrix_for_data_column_sidecar<P: Preset>(
     data_column_sidecar: &DataColumnSidecar<P>,
-) -> Vec<MatrixEntry> {
+) -> Vec<MatrixEntry<P>> {
     let DataColumnSidecar {
         index,
         column,

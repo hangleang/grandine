@@ -29,7 +29,7 @@ use arc_swap::ArcSwap;
 use clock::{Tick, TickKind};
 use drain_filter_polyfill::VecExt as _;
 use eth2_libp2p::{GossipId, PeerId};
-use execution_engine::{ExecutionEngine, PayloadStatusV1};
+use execution_engine::{EngineGetBlobsParams, ExecutionEngine, PayloadStatusV1};
 use fork_choice_store::{
     AggregateAndProofAction, ApplyBlockChanges, ApplyTickChanges, AttestationAction,
     AttestationItem, AttestationOrigin, AttestationValidationError, AttesterSlashingOrigin,
@@ -573,84 +573,47 @@ where
                     submission_time,
                 };
 
-                if let Some(body) = pending_block.block.message().body().post_deneb() {
-                    let blob_count = body.blob_kzg_commitments().len();
+                if pending_block.block.phase().is_peerdas_activated() {
+                    let missing_column_indices = self
+                        .store
+                        .indices_of_missing_data_columns(&pending_block.block);
+                    debug!(
+                        "missing columns: [{}] at slot: {}",
+                        missing_column_indices.iter().join(", "),
+                        slot,
+                    );
 
-                    if pending_block.block.phase().is_peerdas_activated() {
-                        let missing_column_indices = self
-                            .store
-                            .indices_of_missing_data_columns(&pending_block.block);
-                        let sampling_columns_count = self.store.sampling_columns_count();
-                        let number_of_columns = self.store.chain_config().number_of_columns();
-                        let available_columns_count =
-                            sampling_columns_count.saturating_sub(missing_column_indices.len());
+                    if missing_column_indices.is_empty() {
+                        self.retry_block(wait_group, pending_block);
+                    } else {
                         debug!(
-                            "missing columns: [{}] at slot: {}",
-                            missing_column_indices.iter().join(", "),
-                            slot,
+                            "block delayed until sufficient data column sidecars are available \
+                             (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
                         );
 
-                        if missing_column_indices.is_empty() {
-                            self.retry_block(wait_group, pending_block);
-                        } else if available_columns_count * 2 >= number_of_columns
-                            && self.store.is_forward_synced()
-                        {
-                            // Only reconstruct after node has synced up to the head
-                            self.handle_reconstructing_data_column_sidecars(
-                                wait_group,
-                                pending_block,
-                                blob_count,
-                            );
-                        } else {
-                            debug!(
-                                "block delayed until sufficient data column sidecars are available \
-                                 (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
-                            );
-
-                            if let Some(gossip_id) = pending_block.origin.gossip_id() {
-                                self.send_to_p2p(P2pMessage::Accept(gossip_id));
-                            }
-
-                            let pending_block = reply_delayed_block_validation_result(
-                                pending_block,
-                                Ok(ValidationOutcome::Ignore(false)),
-                            );
-
-                            let peer_id = pending_block.origin.peer_id();
-
-                            if sampling_columns_count == number_of_columns {
-                                let blob_ids = (0..blob_count as u64)
-                                    .map(|index| BlobIdentifier { block_root, index })
-                                    .collect_vec();
-
-                                self.request_blobs_from_execution_engine(
-                                    pending_block.block.clone_arc(),
-                                    blob_ids,
-                                    peer_id,
-                                );
-                            }
-
-                            let request_length = if missing_column_indices.len() * 2
-                                >= number_of_columns
-                                && self.store.is_forward_synced()
-                            {
-                                number_of_columns
-                                    .saturating_div(2)
-                                    .saturating_sub(available_columns_count)
-                            } else {
-                                missing_column_indices.len()
-                            };
-
-                            let column_ids = missing_column_indices
-                                .into_iter()
-                                .take(request_length)
-                                .map(|index| DataColumnIdentifier { block_root, index })
-                                .collect_vec();
-
-                            P2pMessage::DataColumnsNeeded(column_ids, slot).send(&self.p2p_tx);
-
-                            self.delay_block_until_blobs(block_root, pending_block);
+                        if let Some(gossip_id) = pending_block.origin.gossip_id() {
+                            self.send_to_p2p(P2pMessage::Accept(gossip_id));
                         }
+
+                        let pending_block = reply_delayed_block_validation_result(
+                            pending_block,
+                            Ok(ValidationOutcome::Ignore(false)),
+                        );
+
+                        let data_column_ids = missing_column_indices
+                            .into_iter()
+                            .map(|index| DataColumnIdentifier { block_root, index })
+                            .collect_vec();
+
+                        let peer_id = pending_block.origin.peer_id();
+
+                        self.request_blobs_from_execution_engine(
+                            pending_block.block.clone_arc(),
+                            data_column_ids.into(),
+                            peer_id,
+                        );
+
+                        self.delay_block_until_blobs(block_root, pending_block);
                     }
                 } else {
                     let block_blob_availability = self.block_blob_availability(
@@ -702,7 +665,7 @@ where
 
                             self.request_blobs_from_execution_engine(
                                 pending_block.block.clone_arc(),
-                                blob_ids,
+                                blob_ids.into(),
                                 peer_id,
                             );
 
@@ -1411,41 +1374,26 @@ where
         match result {
             Ok(DataColumnSidecarAction::Accept(data_column_sidecar)) => {
                 if origin.is_from_el_or_reconstruction() {
-                    self.store_mut()
-                        .mark_as_republished(data_column_sidecar.slot(), data_column_sidecar.index);
-                    self.update_store_snapshot();
-
-                    P2pMessage::PublishDataColumnSidecar(data_column_sidecar.clone_arc())
-                        .send(&self.p2p_tx);
+                    self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(
+                        data_column_sidecar.clone_arc(),
+                    ));
                 }
 
                 let (gossip_id, sender) = origin.split();
-                if self
-                    .store
-                    .sampling_columns()
-                    .into_iter()
-                    .contains(&data_column_sidecar.index)
-                {
-                    if let Some(gossip_id) = gossip_id {
-                        P2pMessage::Accept(gossip_id).send(&self.p2p_tx);
-                    }
 
-                    reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
-
-                    self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
-                } else {
-                    if let Some(gossip_id) = gossip_id {
-                        P2pMessage::Ignore(gossip_id).send(&self.p2p_tx);
-                    }
-
-                    reply_to_http_api(sender, Ok(ValidationOutcome::Ignore(false)));
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Accept(gossip_id));
                 }
+
+                reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
+
+                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
             }
             Ok(DataColumnSidecarAction::Ignore(publishable)) => {
                 let (gossip_id, sender) = origin.split();
 
                 if let Some(gossip_id) = gossip_id {
-                    P2pMessage::Ignore(gossip_id).send(&self.p2p_tx);
+                    self.send_to_p2p(P2pMessage::Ignore(gossip_id));
                 }
 
                 reply_to_http_api(sender, Ok(ValidationOutcome::Ignore(publishable)));
@@ -1470,7 +1418,7 @@ where
 
                     let peer_id = pending_data_column_sidecar.origin.peer_id();
 
-                    P2pMessage::BlockNeeded(parent_root, peer_id).send(&self.p2p_tx);
+                    self.send_to_p2p(P2pMessage::BlockNeeded(parent_root, peer_id));
 
                     let pending_data_column_sidecar =
                         reply_delayed_data_column_sidecar_validation_result(
@@ -1517,13 +1465,12 @@ where
 
                 let (gossip_id, sender) = origin.split();
 
-                P2pMessage::Reject(
+                self.send_to_p2p(P2pMessage::Reject(
                     gossip_id,
                     MutatorRejectionReason::InvalidDataColumnSidecar {
                         data_column_identifier,
                     },
-                )
-                .send(&self.p2p_tx);
+                ));
 
                 reply_to_http_api(sender, Err(error));
             }
@@ -1627,25 +1574,24 @@ where
         }
     }
 
-    fn handle_reconstructing_data_column_sidecars(
-        &mut self,
-        wait_group: W,
-        pending_block: PendingBlock<P>,
-        blob_count: usize,
-    ) {
-        let block = pending_block.block.clone_arc();
-        let slot = block.message().slot();
+    fn handle_reconstructing_data_column_sidecars(&mut self, block: Arc<SignedBeaconBlock<P>>) {
         let block_root = block.message().hash_tree_root();
 
-        if !self.store.is_data_column_sidecars_reconstructed(slot) {
+        // NOTE: Should we need to check whether we have half of columns available or not?
+        if !self.store.is_sidecars_construction_started(block_root) {
             let missing_indices = self.store.indices_of_missing_data_columns(&block);
+            let available_columns_count = self
+                .store
+                .sampling_columns_count()
+                .saturating_sub(missing_indices.len());
 
-            if missing_indices.is_empty() {
-                info!("all column sidecars are available, ignored reconstruction");
-                self.retry_block(wait_group, pending_block);
-            } else {
-                info!(
-                    "handling data column sidecars reconstruction (slot: {slot}, columns: [{}])",
+            if !missing_indices.is_empty()
+                && available_columns_count * 2 >= self.store.chain_config().number_of_columns()
+            {
+                let slot = block.message().slot();
+
+                debug!(
+                    "handling data column sidecars reconstruction (slot: {slot}, missing columns: [{}])",
                     missing_indices.iter().join(", "),
                 );
 
@@ -1653,13 +1599,11 @@ where
                     store_snapshot: self.owned_store(),
                     mutator_tx: self.owned_mutator_tx(),
                     block,
-                    blob_count,
                 });
 
-                self.store_mut().mark_as_reconstructed(slot);
+                self.store_mut()
+                    .mark_started_sidecars_construction(block_root, slot);
                 self.update_store_snapshot();
-
-                self.delay_block_until_blobs(block_root, pending_block);
             }
         }
     }
@@ -1668,7 +1612,7 @@ where
         &self,
         block: &Arc<SignedBeaconBlock<P>>,
         blob_count: usize,
-        full_matrix: Vec<MatrixEntry>,
+        full_matrix: Vec<MatrixEntry<P>>,
     ) -> Result<()> {
         let config = self.store.chain_config();
 
@@ -1687,7 +1631,7 @@ where
             // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
             columns_to_store.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
-            info!(
+            debug!(
                 "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
                 block.message().hash_tree_root(),
                 columns_to_store
@@ -1696,7 +1640,7 @@ where
                     .join(", "),
             );
 
-            P2pMessage::DataColumnReconstructed(columns_to_store).send(&self.p2p_tx);
+            self.send_to_p2p(P2pMessage::DataColumnReconstructed(columns_to_store));
         }
 
         Ok(())
@@ -1935,6 +1879,14 @@ where
         }
 
         debug!("block accepted (block_root: {block_root:?}, block: {block:?}, origin: {origin:?})");
+
+        // Once block accepted while still having any missed columns, reconstruct!
+        if block.phase().is_peerdas_activated()
+            && self.store.is_forward_synced()
+            && !self.store.indices_of_missing_data_columns(block).is_empty()
+        {
+            self.handle_reconstructing_data_column_sidecars(block.clone_arc());
+        }
 
         let block_slot = chain_link.slot();
 
@@ -2228,26 +2180,24 @@ where
 
         self.update_store_snapshot();
 
-        let is_forward_synced = self.store.is_forward_synced();
         let slot = data_column_sidecar.slot();
         let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
         let sampling_columns_count = self.store.sampling_columns_count();
-        let number_of_columns = self.store.chain_config().number_of_columns();
-        let is_ready_to_retry_block = if is_forward_synced {
-            if sampling_columns_count * 2 >= number_of_columns {
-                accepted_data_columns * 2 >= number_of_columns
+        let should_retry_while_syncing =
+            if sampling_columns_count * 2 >= self.store.chain_config().number_of_columns() {
+                accepted_data_columns * 2 >= sampling_columns_count
             } else {
                 accepted_data_columns == sampling_columns_count
-            }
-        } else {
-            accepted_data_columns * 2 >= sampling_columns_count
-        };
+            };
 
         debug!(
             "accepted data column sidecar (index: {}, slot: {slot}, count: {accepted_data_columns})",
             data_column_sidecar.index,
         );
-        if is_ready_to_retry_block {
+
+        // During syncing, if we retry everytime when receiving a sidecar, this might spamming the
+        // queue, leading to delaying other data column sidecar tasks
+        if self.store.is_forward_synced() || should_retry_while_syncing {
             if let Some(pending_block) = self.take_delayed_until_blobs(block_root) {
                 self.retry_block(wait_group.clone(), pending_block);
             }
@@ -2256,10 +2206,7 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
-        if !self.storage.prune_storage_enabled()
-            && (is_forward_synced
-                || self.store.unpersisted_data_column_sidecars().count()
-                    >= MAX_COLUMNS_COUNT_TO_PERSIST)
+        if !self.storage.prune_storage_enabled() && accepted_data_columns == sampling_columns_count
         {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
@@ -2358,11 +2305,10 @@ where
     fn request_blobs_from_execution_engine(
         &self,
         block: Arc<SignedBeaconBlock<P>>,
-        missing_blobs: Vec<BlobIdentifier>,
+        params: EngineGetBlobsParams,
         peer_id: Option<PeerId>,
     ) {
-        self.execution_engine
-            .get_blobs(block, missing_blobs, peer_id);
+        self.execution_engine.get_blobs(block, params, peer_id);
     }
 
     fn notify_forkchoice_updated(&self, new_head: &ChainLink<P>) {

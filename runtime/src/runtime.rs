@@ -241,6 +241,8 @@ pub async fn run_after_genesis<P: Preset>(
 
     let event_channels = Arc::new(EventChannels::new(max_events));
 
+    let sidecars_construction_started = Arc::new(DashMap::new());
+
     let (controller, mutator_handle) = Controller::new(
         chain_config.clone_arc(),
         store_config,
@@ -260,9 +262,11 @@ pub async fn run_after_genesis<P: Preset>(
         unfinalized_blocks,
         !back_sync_enabled || is_anchor_genesis,
         blacklisted_blocks,
+        sidecars_construction_started.clone_arc(),
     )?;
 
     let received_blob_sidecars = Arc::new(DashMap::new());
+    let received_data_column_sidecars = Arc::new(DashMap::new());
 
     let execution_service = ExecutionService::new(
         eth1_api.clone_arc(),
@@ -276,6 +280,8 @@ pub async fn run_after_genesis<P: Preset>(
         eth1_api.clone_arc(),
         controller.clone_arc(),
         received_blob_sidecars.clone_arc(),
+        received_data_column_sidecars.clone_arc(),
+        sidecars_construction_started,
         blob_fetcher_to_p2p_tx,
         execution_service_to_blob_fetcher_rx,
     );
@@ -624,6 +630,7 @@ pub async fn run_after_genesis<P: Preset>(
         storage_config.storage_mode,
         network_config.target_peers,
         received_blob_sidecars,
+        received_data_column_sidecars,
         data_dumper,
     )?;
 

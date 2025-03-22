@@ -20,6 +20,7 @@ use crate::tasks::DataColumnSidecarTask;
 use anyhow::{Context as _, Result};
 use arc_swap::{ArcSwap, Guard};
 use clock::Tick;
+use dashmap::DashMap;
 use eth2_libp2p::{GossipId, PeerId};
 use execution_engine::{ExecutionEngine, PayloadStatusV1};
 use fork_choice_store::{
@@ -112,6 +113,7 @@ where
         unfinalized_blocks: impl DoubleEndedIterator<Item = Result<Arc<SignedBeaconBlock<P>>>>,
         finished_back_sync: bool,
         blacklisted_blocks: HashSet<H256>,
+        sidecars_construction_started: Arc<DashMap<H256, Slot>>,
     ) -> Result<(Arc<Self>, MutatorHandle<P, W>)> {
         let finished_initial_forward_sync = anchor_block.message().slot() >= tick.slot;
 
@@ -124,6 +126,7 @@ where
             finished_initial_forward_sync,
             finished_back_sync,
             blacklisted_blocks,
+            sidecars_construction_started,
         );
 
         store.apply_tick(tick)?;
