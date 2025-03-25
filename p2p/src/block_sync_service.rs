@@ -451,7 +451,12 @@ impl<P: Preset> BlockSyncService<P> {
                                 SyncDirection::Forward => {
                                     let data_column_sidecar_slot = data_column_sidecar.signed_block_header.message.slot;
 
-                                    if self.register_new_received_data_column_sidecar(data_column_identifier, data_column_sidecar_slot) {
+                                    if !self.controller.contains_block(data_column_identifier.block_root)
+                                        && self.register_new_received_data_column_sidecar(
+                                            data_column_identifier,
+                                            data_column_sidecar_slot,
+                                        )
+                                    {
                                         let block_seen = self
                                             .received_block_roots
                                             .contains_key(&data_column_identifier.block_root);
@@ -964,7 +969,10 @@ impl<P: Preset> BlockSyncService<P> {
 
         let identifiers = identifiers
             .into_iter()
-            .filter(|identifier| !self.received_data_column_sidecars.contains_key(identifier))
+            .filter(|identifier| {
+                !self.received_data_column_sidecars.contains_key(identifier)
+                    && !self.controller.contains_block(identifier.block_root)
+            })
             .collect::<Vec<_>>();
 
         if identifiers.is_empty() {
