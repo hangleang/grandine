@@ -22,7 +22,11 @@ use crate::{
         SignedBuilderBid as DenebSignedBuilderBid,
     },
     electra::containers::SignedBuilderBid as ElectraSignedBuilderBid,
-    fulu::containers::SignedBuilderBid as FuluSignedBuilderBid,
+    fulu::containers::{
+        BlobsBundle as FuluBlobsBundle,
+        ExecutionPayloadAndBlobsBundle as FuluExecutionPayloadAndBlobsBundle,
+        SignedBuilderBid as FuluSignedBuilderBid,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -170,16 +174,17 @@ pub enum ExecutionPayloadAndBlobsBundle<P: Preset> {
     Capella(CapellaExecutionPayload<P>),
     Deneb(DenebExecutionPayloadAndBlobsBundle<P>),
     Electra(DenebExecutionPayloadAndBlobsBundle<P>),
-    Fulu(DenebExecutionPayloadAndBlobsBundle<P>),
+    Fulu(FuluExecutionPayloadAndBlobsBundle<P>),
 }
 
 impl<P: Preset> SszSize for ExecutionPayloadAndBlobsBundle<P> {
     // The const parameter should be `Self::VARIANT_COUNT`, but `Self` refers to a generic type.
     // Type parameters cannot be used in `const` contexts until `generic_const_exprs` is stable.
-    const SIZE: Size = Size::for_untagged_union::<{ Phase::CARDINALITY - 4 }>([
+    const SIZE: Size = Size::for_untagged_union::<{ Phase::CARDINALITY - 3 }>([
         BellatrixExecutionPayload::<P>::SIZE,
         CapellaExecutionPayload::<P>::SIZE,
         DenebExecutionPayloadAndBlobsBundle::<P>::SIZE,
+        FuluExecutionPayloadAndBlobsBundle::<P>::SIZE,
     ]);
 }
 
@@ -219,8 +224,7 @@ impl<P: Preset> From<ExecutionPayloadAndBlobsBundle<P>>
                 Self::with_default(execution_payload.into())
             }
             ExecutionPayloadAndBlobsBundle::Deneb(payload_with_blobs_bundle)
-            | ExecutionPayloadAndBlobsBundle::Electra(payload_with_blobs_bundle)
-            | ExecutionPayloadAndBlobsBundle::Fulu(payload_with_blobs_bundle) => {
+            | ExecutionPayloadAndBlobsBundle::Electra(payload_with_blobs_bundle) => {
                 let DenebExecutionPayloadAndBlobsBundle {
                     execution_payload,
                     blobs_bundle,
@@ -236,6 +240,28 @@ impl<P: Preset> From<ExecutionPayloadAndBlobsBundle<P>>
                     execution_payload.into(),
                     Some(commitments),
                     Some(proofs),
+                    Some(blobs),
+                    None,
+                    None,
+                )
+            }
+            ExecutionPayloadAndBlobsBundle::Fulu(payload_with_blobs_bundle) => {
+                let FuluExecutionPayloadAndBlobsBundle {
+                    execution_payload,
+                    blobs_bundle,
+                } = payload_with_blobs_bundle;
+
+                let FuluBlobsBundle {
+                    commitments,
+                    cell_proofs,
+                    blobs,
+                    ..
+                } = blobs_bundle;
+
+                Self::new(
+                    execution_payload.into(),
+                    Some(commitments),
+                    Some(cell_proofs),
                     Some(blobs),
                     None,
                     None,
