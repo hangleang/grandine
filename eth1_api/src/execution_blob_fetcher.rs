@@ -207,7 +207,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                         let (received_blobs, cells_proofs): (Vec<_>, Vec<_>) = blobs_and_proofs
                             .into_iter()
                             .filter_map(|blob_and_proof| {
-                                blob_and_proof.map(|BlobAndProofV2 { blob, proofs }| (blob, proofs))
+                                blob_and_proof.map(|BlobAndProofV2 { blob, cell_proofs }| (blob, cell_proofs))
                             })
                             .unzip();
 

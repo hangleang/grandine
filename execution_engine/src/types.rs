@@ -396,6 +396,14 @@ pub struct BlobsBundle<P: Preset> {
     pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(bound = "", rename_all = "camelCase")]
+pub struct BlobsBundleV2<P: Preset> {
+    pub commitments: ContiguousList<KzgCommitment, P::MaxBlobCommitmentsPerBlock>,
+    pub cell_proofs: KzgProofs<P>,
+    pub blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
+}
+
 /// [`ForkChoiceStateV1`](https://github.com/ethereum/execution-apis/blob/b7c5d3420e00648f456744d121ffbd929862924d/src/engine/paris.md#forkchoicestatev1)
 #[expect(clippy::struct_field_names)]
 #[derive(Serialize)]
@@ -564,7 +572,7 @@ pub struct EngineGetPayloadV5Response<P: Preset> {
     pub execution_payload: ExecutionPayloadV3<P>,
     #[serde(with = "serde_utils::prefixed_hex_quantity")]
     pub block_value: Wei,
-    pub blobs_bundle: BlobsBundle<P>,
+    pub blobs_bundle: BlobsBundleV2<P>,
     pub should_override_builder: bool,
     pub execution_requests: RawExecutionRequests<P>,
 }
@@ -581,16 +589,16 @@ impl<P: Preset> From<EngineGetPayloadV5Response<P>> for WithBlobsAndMev<Executio
 
         let execution_payload = ExecutionPayload::Deneb(execution_payload.into());
 
-        let BlobsBundle {
+        let BlobsBundleV2 {
             commitments,
-            proofs,
+            cell_proofs,
             blobs,
         } = blobs_bundle;
 
         Self::new(
             execution_payload,
             Some(commitments),
-            Some(proofs),
+            Some(cell_proofs),
             Some(blobs),
             Some(block_value),
             Some(execution_requests.into()),
@@ -916,7 +924,7 @@ pub struct BlobAndProofV1<P: Preset> {
 #[serde(bound = "", rename_all = "camelCase")]
 pub struct BlobAndProofV2<P: Preset> {
     pub blob: Blob<P>,
-    pub proofs: Arc<ContiguousVector<KzgProof, P::CellsPerExtBlob>>,
+    pub cell_proofs: Arc<ContiguousVector<KzgProof, P::CellsPerExtBlob>>,
 }
 
 // pub type GetBlobsV2Response<P> = Vec<Option<BlobAndProofV2<P>>>;
