@@ -1,14 +1,14 @@
 use anyhow::Result;
 use kzg::eth::eip_7594::{
-    compute_cells_and_kzg_proofs_raw, recover_cells_and_kzg_proofs_raw,
+    compute_cells_and_kzg_proofs_raw, compute_cells_raw, recover_cells_and_kzg_proofs_raw,
     verify_cell_kzg_proof_batch_raw,
 };
 use rust_kzg_blst::eip_7594::BlstBackend;
 use ssz::{ByteVector, ContiguousVector};
-use try_from_iterator::TryFromIterator as _;
+use try_from_iterator::TryFromIterator;
 use types::{
     deneb::primitives::{Blob, KzgCommitment, KzgProof},
-    fulu::primitives::{Cell, CellIndex},
+    fulu::primitives::{Cell, CellIndex, CellsAndKzgProofs},
     preset::Preset,
 };
 
@@ -51,12 +51,7 @@ pub fn verify_cell_kzg_proof_batch<'a, P: Preset>(
     .map_err(Into::into)
 }
 
-pub fn compute_cells_and_kzg_proofs<P: Preset>(
-    blob: &Blob<P>,
-) -> Result<(
-    impl IntoIterator<Item = Cell<P>>,
-    impl IntoIterator<Item = KzgProof>,
-)> {
+pub fn compute_cells_and_kzg_proofs<P: Preset>(blob: &Blob<P>) -> Result<CellsAndKzgProofs<P>> {
     let raw_blob = blob.as_bytes().try_into()?;
 
     let (cells, proofs) =
@@ -66,17 +61,16 @@ pub fn compute_cells_and_kzg_proofs<P: Preset>(
         .into_iter()
         .map(try_convert_to_cell::<P>)
         .collect::<Result<Vec<_>>>()?;
+    let cells = ContiguousVector::try_from_iter(cells)?;
+    let proofs = ContiguousVector::try_from_iter(proofs.into_iter().map(Into::into))?;
 
-    Ok((cells, proofs.into_iter().map(Into::into)))
+    Ok((cells, proofs))
 }
 
 pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
     cell_indices: impl IntoIterator<Item = CellIndex>,
     cells: impl IntoIterator<Item = &'cell Cell<P>>,
-) -> Result<(
-    impl IntoIterator<Item = Cell<P>>,
-    impl IntoIterator<Item = KzgProof>,
-)> {
+) -> Result<CellsAndKzgProofs<P>> {
     let cell_indices = cell_indices
         .into_iter()
         .map(|index| usize::try_from(index).map_err(Into::into))
@@ -98,8 +92,25 @@ pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
         .into_iter()
         .map(try_convert_to_cell::<P>)
         .collect::<Result<Vec<_>>>()?;
+    let cells = ContiguousVector::try_from_iter(cells)?;
+    let proofs = ContiguousVector::try_from_iter(proofs.into_iter().map(Into::into))?;
 
-    Ok((cells, proofs.into_iter().map(Into::into)))
+    Ok((cells, proofs))
+}
+
+pub fn compute_cells<P: Preset>(
+    blob: &Blob<P>,
+) -> Result<ContiguousVector<Cell<P>, P::CellsPerExtBlob>> {
+    let raw_blob = blob.as_bytes().try_into()?;
+
+    let cells = compute_cells_raw::<BlstBackend>(raw_blob, trusted_setup::blst_settings())
+        .map_err(KzgError::KzgError)?;
+    let cells = cells
+        .into_iter()
+        .map(try_convert_to_cell::<P>)
+        .collect::<Result<Vec<_>>>()?;
+
+    ContiguousVector::try_from_iter(cells).map_err(Into::into)
 }
 
 pub(crate) fn try_convert_to_cell<P: Preset>(

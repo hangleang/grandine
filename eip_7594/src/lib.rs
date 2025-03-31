@@ -1,28 +1,24 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{ensure, Result};
 use helper_functions::{misc, predicates::is_valid_merkle_branch};
 use itertools::Itertools as _;
 use kzg_utils::eip_7594::{
-    compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs, verify_cell_kzg_proof_batch,
+    compute_cells, compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs,
+    verify_cell_kzg_proof_batch,
 };
 use num_traits::One as _;
-use rayon::iter::{
-    IndexedParallelIterator as _, IntoParallelIterator as _, IntoParallelRefIterator,
-    ParallelIterator as _,
-};
+use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, ParallelIterator as _};
 use sha2::{Digest as _, Sha256};
-use ssz::{ContiguousList, SszHash as _, Uint256};
+use ssz::{ContiguousList, ContiguousVector, SszHash as _, Uint256};
 use try_from_iterator::TryFromIterator as _;
-use typenum::Unsigned as _;
 use types::{
     combined::SignedBeaconBlock,
     config::Config,
-    deneb::primitives::{Blob, KzgProof},
+    deneb::primitives::Blob,
     fulu::{
-        consts::NumberOfColumns,
         containers::{DataColumnSidecar, MatrixEntry},
-        primitives::{Cell, ColumnIndex, CustodyIndex},
+        primitives::{CellsAndKzgProofs, ColumnIndex, CustodyIndex, ExtCells},
     },
     phase0::primitives::{NodeId, SubnetId},
     preset::Preset,
@@ -34,10 +30,6 @@ mod error;
 
 #[cfg(test)]
 mod tests;
-
-type ColumnCells<P> = [Cell<P>; NumberOfColumns::USIZE];
-type ColumnProofs = [KzgProof; NumberOfColumns::USIZE];
-type CellsAndKzgProofs<P> = Vec<(ColumnCells<P>, ColumnProofs)>;
 
 #[cfg(feature = "metrics")]
 use prometheus_metrics::METRICS;
@@ -226,12 +218,12 @@ pub fn verify_sidecar_inclusion_proof<P: Preset>(
  *
  * This helper demonstrates the relationship between blobs and the matrix of cells/proofs.
  */
-pub fn compute_matrix<P: Preset>(blobs: &[Blob<P>]) -> Result<Vec<MatrixEntry<P>>> {
+pub fn compute_matrix<P: Preset>(blobs: Vec<Blob<P>>) -> Result<Vec<MatrixEntry<P>>> {
     let all_matrix = blobs
-        .par_iter()
+        .into_par_iter()
         .enumerate()
         .map(|(blob_index, blob)| {
-            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(blob)?;
+            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(&blob)?;
             cells
                 .into_iter()
                 .zip(proofs)
@@ -300,7 +292,7 @@ pub fn recover_matrix<P: Preset>(
 
 pub fn construct_data_column_sidecars<P: Preset>(
     signed_block: &SignedBeaconBlock<P>,
-    cells_and_kzg_proofs: &CellsAndKzgProofs<P>,
+    cells_and_kzg_proofs: &[CellsAndKzgProofs<P>],
     config: &Config,
 ) -> Result<Vec<DataColumnSidecar<P>>> {
     let signed_block_header = signed_block.to_header();
@@ -349,58 +341,33 @@ pub fn construct_data_column_sidecars<P: Preset>(
 }
 
 pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
-    blobs: &[Blob<P>],
-) -> Result<CellsAndKzgProofs<P>> {
-    let cells_and_kzg_proofs = blobs
-        .par_iter()
-        .map(|blob| compute_cells_and_kzg_proofs::<P>(blob))
-        .collect::<Result<Vec<_>>>()?;
+    blobs: Vec<Blob<P>>,
+) -> Result<Vec<CellsAndKzgProofs<P>>> {
+    blobs
+        .into_par_iter()
+        .map(|blob| compute_cells_and_kzg_proofs::<P>(&blob))
+        .collect::<Result<Vec<_>>>()
+}
 
-    let mut result = vec![];
-    for (cells, proofs) in cells_and_kzg_proofs {
-        let column_cells = cells
-            .into_iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("column cells should have length of CELLS_PER_EXT_BLOB");
-
-        let column_proofs = proofs
-            .into_iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("column proofs should have length of CELLS_PER_EXT_BLOB");
-
-        result.push((column_cells, column_proofs));
-    }
-
-    Ok(result)
+pub fn try_compute_ext_cells<P: Preset>(blobs: Vec<Blob<P>>) -> Result<Vec<ExtCells<P>>> {
+    blobs
+        .into_par_iter()
+        .map(|blob| compute_cells::<P>(&blob))
+        .collect::<Result<Vec<_>>>()
 }
 
 pub fn construct_cells_and_kzg_proofs<P: Preset>(
     full_matrix: Vec<MatrixEntry<P>>,
-    blob_count: usize,
-) -> Result<CellsAndKzgProofs<P>> {
-    let default_cell = Cell::<P>::default();
-    let mut cells_and_kzg_proofs = vec![
-        (
-            core::array::from_fn(|_| default_cell.clone()),
-            [KzgProof::zero(); NumberOfColumns::USIZE],
-        );
-        blob_count
-    ];
-    for entry in full_matrix {
-        let MatrixEntry {
-            cell,
-            kzg_proof,
-            column_index,
-            row_index,
-        } = entry;
-
-        let row_index = usize::try_from(row_index)?;
-        let column_index = usize::try_from(column_index)?;
-        cells_and_kzg_proofs[row_index].0[column_index] = cell;
-        cells_and_kzg_proofs[row_index].1[column_index] = kzg_proof;
+) -> Result<Vec<CellsAndKzgProofs<P>>> {
+    let mut result = BTreeMap::new();
+    for (row_index, matrixes) in &full_matrix.into_iter().chunk_by(|matrix| matrix.row_index) {
+        let (cells, proofs): (Vec<_>, Vec<_>) = matrixes
+            .map(|matrix| (matrix.cell, matrix.kzg_proof))
+            .unzip();
+        let cells = ContiguousVector::try_from_iter(cells.into_iter())?;
+        let proofs = ContiguousVector::try_from_iter(proofs.into_iter())?;
+        result.insert(row_index, (cells, proofs));
     }
 
-    Ok(cells_and_kzg_proofs)
+    Ok(result.into_values().collect())
 }

@@ -10,7 +10,8 @@ use crate::{
         verify_blob_kzg_proof_batch, verify_kzg_proof,
     },
     eip_7594::{
-        compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs, verify_cell_kzg_proof_batch,
+        compute_cells, compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs,
+        verify_cell_kzg_proof_batch,
     },
     spec_tests::{containers, utils::deserialize},
     KzgBackend,
@@ -259,6 +260,36 @@ fn test_verify_kzg_proof(case: Case) {
                     "test output should not exist (backend {backend})"
                 );
             }
+        }
+    }
+}
+
+#[test_resources("consensus-spec-tests/tests/general/fulu/kzg/compute_cells/*/*")]
+fn test_compute_cells(case: Case) {
+    let test: containers::compute_cells::Test = case.yaml("data");
+
+    let blob = match deserialize(&test.input.blob) {
+        Ok(blob) => blob,
+        Err(_) => {
+            assert!(test.output.is_none());
+            return;
+        }
+    };
+
+    let expected_cells = match test.get_output::<Mainnet>() {
+        Some(output) => output,
+        None => {
+            assert!(test.output.is_none());
+            return;
+        }
+    };
+
+    match compute_cells::<Mainnet>(&blob) {
+        Ok(cells) => {
+            assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
+        }
+        Err(_) => {
+            assert!(test.output.is_none());
         }
     }
 }

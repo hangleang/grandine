@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Result;
 use dedicated_executor::DedicatedExecutor;
-use log::{debug, info, warn};
+use log::{info, warn};
 use web3::{api::Namespace as _, helpers::CallFuture, Error, Transport as _};
 
 use crate::{eth1_api::CAPABILITIES, Eth1Api};
@@ -49,7 +49,6 @@ async fn exchange_capabilities(eth1_api: &Eth1Api) -> Result<()> {
                 endpoint.set_capabilities(response.clone());
 
                 info!("updated capabilities for eth1 endpoint: {}", endpoint.url());
-                debug!("new eth1 capabilities: {:?}", response)
             }
             Err(error) => {
                 eth1_api.on_error_response(endpoint);

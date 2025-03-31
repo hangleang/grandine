@@ -315,11 +315,9 @@ where
                 MutatorMessage::StoreSamplingColumns { sampling_columns } => {
                     self.handle_store_sampling_columns(sampling_columns)
                 }
-                MutatorMessage::ReconstructedMissingColumns {
-                    block,
-                    blob_count,
-                    full_matrix,
-                } => self.handle_reconstructed_missing_columns(&block, blob_count, full_matrix)?,
+                MutatorMessage::ReconstructedMissingColumns { block, full_matrix } => {
+                    self.handle_reconstructed_missing_columns(&block, full_matrix)?
+                }
             }
         }
     }
@@ -1577,7 +1575,6 @@ where
     fn handle_reconstructing_data_column_sidecars(&mut self, block: Arc<SignedBeaconBlock<P>>) {
         let block_root = block.message().hash_tree_root();
 
-        // NOTE: Should we need to check whether we have half of columns available or not?
         if !self.store.is_sidecars_construction_started(block_root) {
             let missing_indices = self.store.indices_of_missing_data_columns(&block);
             let available_columns_count = self
@@ -1586,6 +1583,7 @@ where
                 .saturating_sub(missing_indices.len());
 
             if !missing_indices.is_empty()
+                && available_columns_count > 0
                 && available_columns_count * 2 >= self.store.chain_config().number_of_columns()
             {
                 let slot = block.message().slot();
@@ -1595,15 +1593,15 @@ where
                     missing_indices.iter().join(", "),
                 );
 
+                self.store_mut()
+                    .mark_started_sidecars_construction(block_root, slot);
+                self.update_store_snapshot();
+
                 self.spawn(ReconstructDataColumnSidecarsTask {
                     store_snapshot: self.owned_store(),
                     mutator_tx: self.owned_mutator_tx(),
                     block,
                 });
-
-                self.store_mut()
-                    .mark_started_sidecars_construction(block_root, slot);
-                self.update_store_snapshot();
             }
         }
     }
@@ -1611,7 +1609,6 @@ where
     fn handle_reconstructed_missing_columns(
         &self,
         block: &Arc<SignedBeaconBlock<P>>,
-        blob_count: usize,
         full_matrix: Vec<MatrixEntry<P>>,
     ) -> Result<()> {
         let config = self.store.chain_config();
@@ -1619,28 +1616,26 @@ where
         let missing_indices = self.store.indices_of_missing_data_columns(block);
 
         if !missing_indices.is_empty() {
-            let cells_and_kzg_proofs =
-                eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-            let mut columns_to_store =
+            let cells_and_kzg_proofs = eip_7594::construct_cells_and_kzg_proofs(full_matrix)?;
+            let mut data_column_sidecars =
                 eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
                     .into_iter()
-                    .filter(|column| missing_indices.contains(&column.index))
+                    .filter(|data_column_sidecar| {
+                        missing_indices.contains(&data_column_sidecar.index)
+                    })
                     .map(Arc::new)
                     .collect::<Vec<_>>();
 
             // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
-            columns_to_store.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
+            data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
             debug!(
                 "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
                 block.message().hash_tree_root(),
-                columns_to_store
-                    .iter()
-                    .map(|column| column.index)
-                    .join(", "),
+                data_column_sidecars.iter().map(|dc| dc.index).join(", "),
             );
 
-            self.send_to_p2p(P2pMessage::DataColumnReconstructed(columns_to_store));
+            self.send_to_p2p(P2pMessage::DataColumnReconstructed(data_column_sidecars));
         }
 
         Ok(())
@@ -2556,7 +2551,7 @@ where
     ) -> bool {
         self.delayed_until_block
             .get(&parent_root)
-            .map_or(false, |entry| {
+            .is_some_and(|entry| {
                 entry
                     .data_column_sidecars
                     .iter()
@@ -2586,7 +2581,7 @@ where
         slot: Slot,
         column_index: ColumnIndex,
     ) -> bool {
-        self.delayed_until_slot.get(&slot).map_or(false, |entry| {
+        self.delayed_until_slot.get(&slot).is_some_and(|entry| {
             entry
                 .data_column_sidecars
                 .iter()
