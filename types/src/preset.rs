@@ -184,6 +184,7 @@ pub trait Preset: Copy + Eq + Ord + Hash + Default + Debug + Send + Sync + 'stat
         + NonZero
         + Mul<BytesPerFieldElement, Output: ByteVectorBytes + MerkleElements<u8>>;
     type CellsPerExtBlob: ContiguousVectorElements<KzgProof>
+        + ContiguousVectorElements<Cell<Self>>
         + ArrayLength<KzgProof, ArrayType: Copy>
         + Debug
         + Eq;

@@ -173,7 +173,6 @@ pub enum MutatorMessage<P: Preset, W> {
     },
     ReconstructedMissingColumns {
         block: Arc<SignedBeaconBlock<P>>,
-        blob_count: usize,
         full_matrix: Vec<MatrixEntry<P>>,
     },
 }

@@ -541,12 +541,8 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
 
                 match eip_7594::recover_matrix(&partial_matrix, blob_count) {
                     Ok(full_matrix) => {
-                        MutatorMessage::ReconstructedMissingColumns {
-                            block,
-                            blob_count,
-                            full_matrix,
-                        }
-                        .send(&mutator_tx);
+                        MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
+                            .send(&mutator_tx);
                     }
                     Err(error) => {
                         warn!("failed to reconstruct missing data column sidecars: {error:?}");
