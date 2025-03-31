@@ -311,11 +311,9 @@ where
                 MutatorMessage::StoreSamplingColumns { sampling_columns } => {
                     self.handle_store_sampling_columns(sampling_columns)
                 }
-                MutatorMessage::ReconstructedMissingColumns {
-                    block,
-                    blob_count,
-                    full_matrix,
-                } => self.handle_reconstructed_missing_columns(&block, blob_count, full_matrix)?,
+                MutatorMessage::ReconstructedMissingColumns { block, full_matrix } => {
+                    self.handle_reconstructed_missing_columns(&block, full_matrix)?
+                }
             }
         }
     }
@@ -1514,7 +1512,6 @@ where
     fn handle_reconstructed_missing_columns(
         &self,
         block: &Arc<SignedBeaconBlock<P>>,
-        blob_count: usize,
         full_matrix: Vec<MatrixEntry<P>>,
     ) -> Result<()> {
         let config = self.store.chain_config();
@@ -1522,28 +1519,22 @@ where
         let missing_indices = self.store.indices_of_missing_data_columns(block);
 
         if !missing_indices.is_empty() {
-            let cells_and_kzg_proofs =
-                eip_7594::construct_cells_and_kzg_proofs(full_matrix, blob_count)?;
-            let mut columns_to_store =
+            let cells_and_kzg_proofs = eip_7594::construct_cells_and_kzg_proofs(full_matrix)?;
+            let mut data_column_sidecars =
                 eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
                     .into_iter()
-                    .filter(|column| missing_indices.contains(&column.index))
                     .map(Arc::new)
                     .collect::<Vec<_>>();
 
             // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
-            columns_to_store.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
+            data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
             debug!(
-                "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
+                "storing data column sidecars at block {} from reconstruction",
                 block.message().hash_tree_root(),
-                columns_to_store
-                    .iter()
-                    .map(|column| column.index)
-                    .join(", "),
             );
 
-            self.send_to_p2p(P2pMessage::DataColumnReconstructed(columns_to_store));
+            self.send_to_p2p(P2pMessage::DataColumnReconstructed(data_column_sidecars));
         }
 
         Ok(())
