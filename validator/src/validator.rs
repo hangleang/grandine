@@ -949,8 +949,10 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                             );
                         }
 
-                        ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar)
-                            .send(&self.p2p_tx);
+                        if !self.validator_config.withhold_data_columns_publishing {
+                            ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar)
+                                .send(&self.p2p_tx);
+                        }
                     }
                 } else {
                     for blob_sidecar in misc::construct_blob_sidecars(

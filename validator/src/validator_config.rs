@@ -15,4 +15,5 @@ pub struct ValidatorConfig {
     pub suggested_fee_recipient: ExecutionAddress,
     pub default_gas_limit: Gas,
     pub keystore_storage_password_file: Option<PathBuf>,
+    pub withhold_data_columns_publishing: bool,
 }
