@@ -399,6 +399,8 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
                 .as_ref()
                 .map(|metrics| metrics.data_column_sidecar_verification_times.start_timer());
 
+            metrics.data_column_sidecars_submitted_for_processing.inc();
+
             let _timer = metrics
                 .as_ref()
                 .map(|metrics| metrics.fc_data_column_sidecar_task_times.start_timer());
