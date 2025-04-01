@@ -715,6 +715,7 @@ struct SlasherOptions {
     slashing_history_limit: u64,
 }
 
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Args)]
 struct ValidatorOptions {
     /// Path to a directory containing EIP-2335 keystore files
@@ -792,6 +793,10 @@ struct ValidatorOptions {
     /// Number of epochs to keep slashing protection data for
     #[clap(long, default_value_t = DEFAULT_SLASHING_PROTECTION_HISTORY_LIMIT)]
     slashing_protection_history_limit: u64,
+
+    // Withhold all data column sidecars when assigned to propose a block. Use for testing purpose
+    #[clap(long)]
+    withhold_data_columns_publishing: bool,
 }
 
 #[derive(Args)]
@@ -992,6 +997,7 @@ impl GrandineArgs {
             web3signer_api_urls,
             web3signer_urls,
             slashing_protection_history_limit,
+            withhold_data_columns_publishing,
         } = validator_options;
 
         if in_memory {
@@ -1361,6 +1367,7 @@ impl GrandineArgs {
             validator_api_config,
             kzg_backend,
             blacklisted_blocks: blacklisted_blocks.into_iter().collect(),
+            withhold_data_columns_publishing,
         })
     }
 
