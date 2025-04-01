@@ -110,7 +110,6 @@ enum HighPriorityTask<P: Preset, E, W> {
     CheckpointState(CheckpointStateTask<P, W>),
     DataColumnSidecar(DataColumnSidecarTask<P, W>),
     PreprocessState(PreprocessStateTask<P, W>),
-    ReconstructDataColumnSidecars(ReconstructDataColumnSidecarsTask<P, W>),
 }
 
 impl<P: Preset, E: ExecutionEngine<P> + Send, W> Run for HighPriorityTask<P, E, W> {
@@ -122,7 +121,6 @@ impl<P: Preset, E: ExecutionEngine<P> + Send, W> Run for HighPriorityTask<P, E, 
             Self::CheckpointState(task) => task.run(),
             Self::DataColumnSidecar(task) => task.run(),
             Self::PreprocessState(task) => task.run(),
-            Self::ReconstructDataColumnSidecars(task) => task.run(),
         }
     }
 }
@@ -135,6 +133,7 @@ enum LowPriorityTask<P: Preset, W> {
     AttesterSlashing(AttesterSlashingTask<P, W>),
     PersistBlobSidecarsTask(PersistBlobSidecarsTask<P, W>),
     PersistDataColumnSidecarsTask(PersistDataColumnSidecarsTask<P, W>),
+    ReconstructDataColumnSidecars(ReconstructDataColumnSidecarsTask<P, W>),
 }
 
 impl<P: Preset, W> Run for LowPriorityTask<P, W> {
@@ -146,6 +145,7 @@ impl<P: Preset, W> Run for LowPriorityTask<P, W> {
             Self::AttesterSlashing(task) => task.run(),
             Self::PersistBlobSidecarsTask(task) => task.run(),
             Self::PersistDataColumnSidecarsTask(task) => task.run(),
+            Self::ReconstructDataColumnSidecars(task) => task.run(),
         }
     }
 }
@@ -228,7 +228,7 @@ impl<P: Preset, E, W> Spawn<P, E, W> for PersistDataColumnSidecarsTask<P, W> {
 
 impl<P: Preset, E, W> Spawn<P, E, W> for ReconstructDataColumnSidecarsTask<P, W> {
     fn spawn(self, critical: &mut Critical<P, E, W>) {
-        critical.high_priority_tasks.push_back(self.into())
+        critical.low_priority_tasks.push_back(self.into())
     }
 }
 

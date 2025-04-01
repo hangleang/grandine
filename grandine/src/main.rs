@@ -393,6 +393,7 @@ fn try_main() -> Result<()> {
         in_memory,
         validator_api_config,
         kzg_backend,
+        withhold_data_columns_publishing,
     } = config;
 
     features.into_iter().for_each(Feature::enable);
@@ -428,6 +429,7 @@ fn try_main() -> Result<()> {
         suggested_fee_recipient,
         default_gas_limit,
         keystore_storage_password_file,
+        withhold_data_columns_publishing,
     });
 
     let store_config = StoreConfig {

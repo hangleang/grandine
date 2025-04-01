@@ -1496,15 +1496,15 @@ where
                     missing_indices.iter().join(", "),
                 );
 
+                self.store_mut()
+                    .mark_started_sidecars_construction(block_root, slot);
+                self.update_store_snapshot();
+
                 self.spawn(ReconstructDataColumnSidecarsTask {
                     store_snapshot: self.owned_store(),
                     mutator_tx: self.owned_mutator_tx(),
                     block,
                 });
-
-                self.store_mut()
-                    .mark_started_sidecars_construction(block_root, slot);
-                self.update_store_snapshot();
             }
         }
     }
@@ -1523,6 +1523,9 @@ where
             let mut data_column_sidecars =
                 eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
                     .into_iter()
+                    .filter(|data_column_sidecar| {
+                        missing_indices.contains(&data_column_sidecar.index)
+                    })
                     .map(Arc::new)
                     .collect::<Vec<_>>();
 
@@ -1530,8 +1533,9 @@ where
             data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
             debug!(
-                "storing data column sidecars at block {} from reconstruction",
+                "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
                 block.message().hash_tree_root(),
+                data_column_sidecars.iter().map(|dc| dc.index).join(", "),
             );
 
             self.send_to_p2p(P2pMessage::DataColumnReconstructed(data_column_sidecars));

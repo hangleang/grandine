@@ -69,6 +69,7 @@ pub struct GrandineConfig {
     pub in_memory: bool,
     pub validator_api_config: Option<ValidatorApiConfig>,
     pub kzg_backend: KzgBackend,
+    pub withhold_data_columns_publishing: bool,
 }
 
 impl GrandineConfig {
@@ -94,6 +95,7 @@ impl GrandineConfig {
             checkpoint_sync_url,
             use_validator_key_cache,
             validator_api_config,
+            withhold_data_columns_publishing,
             ..
         } = self;
 
@@ -177,6 +179,10 @@ impl GrandineConfig {
 
         if *use_validator_key_cache {
             info!("using validator key cache");
+        }
+
+        if *withhold_data_columns_publishing {
+            info!("withholding data column sidecars publishing");
         }
     }
 }

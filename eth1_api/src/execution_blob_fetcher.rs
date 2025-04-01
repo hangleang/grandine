@@ -198,6 +198,8 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
             let expected_blob_count = versioned_hashes.len();
 
             if !self.sidecars_construction_started.contains_key(&block_root) {
+                let mut data_column_sidecars = vec![];
+
                 match self.api.get_blobs_v2::<P>(versioned_hashes).await {
                     Ok(blobs_and_proofs) => {
                         // TODO(feature/fulu): use EL constructed `cells_proofs` with extended `cells`
@@ -260,10 +262,9 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                                             .insert(data_column_identifier, slot)
                                                             .is_none()
                                                         {
-                                                            self.controller
-                                                                .on_el_data_column_sidecar(
-                                                                    Arc::new(data_column_sidecar),
-                                                                );
+                                                            data_column_sidecars.push(Arc::new(
+                                                                data_column_sidecar,
+                                                            ));
                                                         }
                                                     }
                                                 }
@@ -286,13 +287,18 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                         } else {
                             debug!(
                                 "received blobs less than expected from EL at slot: {slot} \
-                                 expected: {}, got: {}",
+                                 (expected: {}, got: {})",
                                 expected_blob_count,
                                 received_blobs.len(),
                             );
                         }
                     }
                     Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),
+                }
+
+                for data_column_sidecar in data_column_sidecars {
+                    self.controller
+                        .on_el_data_column_sidecar(data_column_sidecar);
                 }
             }
 

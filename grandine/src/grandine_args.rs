@@ -788,6 +788,10 @@ struct ValidatorOptions {
     /// Number of epochs to keep slashing protection data for
     #[clap(long, default_value_t = DEFAULT_SLASHING_PROTECTION_HISTORY_LIMIT)]
     slashing_protection_history_limit: u64,
+
+    // Withhold all data column sidecars when assigned to propose a block. Use for testing purpose
+    #[clap(long)]
+    withhold_data_columns_publishing: bool,
 }
 
 #[derive(Args)]
@@ -987,6 +991,7 @@ impl GrandineArgs {
             web3signer_api_urls,
             web3signer_urls,
             slashing_protection_history_limit,
+            withhold_data_columns_publishing,
         } = validator_options;
 
         if in_memory {
@@ -1355,6 +1360,7 @@ impl GrandineArgs {
             in_memory,
             validator_api_config,
             kzg_backend,
+            withhold_data_columns_publishing,
         })
     }
 
