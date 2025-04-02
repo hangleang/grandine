@@ -562,7 +562,6 @@ where
                 );
             }
             Ok(BlockAction::DelayUntilBlobs(block, state)) => {
-                let slot = block.message().slot();
                 let block_root = block.message().hash_tree_root();
 
                 let pending_block = PendingBlock {
@@ -575,18 +574,21 @@ where
                     let missing_column_indices = self
                         .store
                         .indices_of_missing_data_columns(&pending_block.block);
-                    debug!(
-                        "missing columns: [{}] at slot: {}",
-                        missing_column_indices.iter().join(", "),
-                        slot,
-                    );
+                    let available_columns_count = self
+                        .store
+                        .sampling_columns_count()
+                        .saturating_sub(missing_column_indices.len());
 
-                    if missing_column_indices.is_empty() {
+                    if missing_column_indices.is_empty() || self.store.is_forward_synced()
+                        && available_columns_count > 0
+                            && available_columns_count * 2
+                                >= self.store.chain_config().number_of_columns()
+                    {
                         self.retry_block(wait_group, pending_block);
                     } else {
                         debug!(
                             "block delayed until sufficient data column sidecars are available \
-                             (column indices: {missing_column_indices:?}, pending block root: {block_root:?})",
+                             (missing columns: {missing_column_indices:?}, pending block root: {block_root:?})",
                         );
 
                         if let Some(gossip_id) = pending_block.origin.gossip_id() {
