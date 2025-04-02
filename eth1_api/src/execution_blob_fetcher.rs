@@ -226,7 +226,10 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                             .unzip();
 
                         if received_blobs.len() == expected_blob_count {
-                            debug!("received all blob sidecars from EL at slot: {slot}");
+                            debug!(
+                                "received all {} blob sidecars from EL at slot: {slot}",
+                                expected_blob_count
+                            );
 
                             match cells_proofs
                                 .into_iter()
@@ -250,6 +253,10 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                                 self.controller.chain_config(),
                                             ) {
                                                 Ok(data_columns) => {
+                                                    debug!(
+                                                        "constructed data columns count: {}",
+                                                        data_columns.len()
+                                                    );
                                                     self.sidecars_construction_started
                                                         .insert(block_root, slot);
 
@@ -288,8 +295,8 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                             }
                                         }
                                         Err(error) => warn!(
-                                            "failed to convert blobs received from execution layer \
-                                            into cells and kzg proofs: {error:?}"
+                                            "failed to convert blobs received from EL \
+                                            into extended cells: {error:?}"
                                         ),
                                     }
                                 }
@@ -309,6 +316,11 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                     Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),
                 }
 
+                debug!(
+                    "after EL (missing: {}, received: {})",
+                    missing_columns_indices.len(),
+                    data_column_sidecars.len()
+                );
                 for data_column_sidecar in data_column_sidecars {
                     self.controller
                         .on_el_data_column_sidecar(data_column_sidecar);
