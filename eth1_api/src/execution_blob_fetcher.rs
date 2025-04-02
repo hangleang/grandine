@@ -18,7 +18,7 @@ use try_from_iterator::TryFromIterator as _;
 use types::{
     combined::SignedBeaconBlock,
     deneb::{containers::BlobIdentifier, primitives::BlobIndex},
-    fulu::containers::DataColumnIdentifier,
+    fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
     phase0::primitives::Slot,
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -162,18 +162,20 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 }
             }
 
-            // Request remaining missing blob sidecars from P2P
-            let missing_blob_identifiers = missing_blob_indices
-                .into_iter()
-                .map(|index| BlobIdentifier { block_root, index })
-                .filter(|identifier| !self.received_blob_sidecars.contains_key(identifier))
-                .collect::<Vec<_>>();
+            if !self.controller.contains_block(block_root) {
+                // Request remaining missing blob sidecars from P2P
+                let missing_blob_identifiers = missing_blob_indices
+                    .into_iter()
+                    .map(|index| BlobIdentifier { block_root, index })
+                    .filter(|identifier| !self.received_blob_sidecars.contains_key(identifier))
+                    .collect::<Vec<_>>();
 
-            debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
+                debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
 
-            if !missing_blob_identifiers.is_empty() {
-                BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
-                    .send(&self.p2p_tx);
+                if !missing_blob_identifiers.is_empty() {
+                    BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
+                        .send(&self.p2p_tx);
+                }
             }
         }
     }
@@ -189,6 +191,19 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
         let block_root = block.message().hash_tree_root();
 
         if let Some(body) = block.message().body().post_deneb() {
+            let missing_columns_indices = data_column_identifiers
+                .iter()
+                .filter(|identifier| !self.received_data_column_sidecars.contains_key(identifier))
+                .map(|identifier| identifier.index)
+                .collect::<HashSet<ColumnIndex>>();
+
+            if missing_columns_indices.is_empty() {
+                debug!(
+                    "cannot fetch blobs from EL: all requested blob sidecars have been received"
+                );
+                return;
+            }
+
             let versioned_hashes = body
                 .blob_kzg_commitments()
                 .iter()
@@ -214,7 +229,10 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                             .unzip();
 
                         if received_blobs.len() == expected_blob_count {
-                            debug!("received all blob sidecars from EL at slot: {slot}");
+                            debug!(
+                                "received all {} blob sidecars from EL at slot: {slot}",
+                                expected_blob_count
+                            );
 
                             match cells_proofs
                                 .into_iter()
@@ -238,6 +256,10 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                                 self.controller.chain_config(),
                                             ) {
                                                 Ok(data_columns) => {
+                                                    debug!(
+                                                        "constructed data columns count: {}",
+                                                        data_columns.len()
+                                                    );
                                                     self.sidecars_construction_started
                                                         .insert(block_root, slot);
 
@@ -275,8 +297,8 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                             }
                                         }
                                         Err(error) => warn!(
-                                            "failed to convert blobs received from execution layer \
-                                            into cells and kzg proofs: {error:?}"
+                                            "failed to convert blobs received from EL \
+                                            into extended cells: {error:?}"
                                         ),
                                     }
                                 }
@@ -296,29 +318,39 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                     Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),
                 }
 
+                debug!(
+                    "after EL (missing: {}, received: {})",
+                    missing_columns_indices.len(),
+                    data_column_sidecars.len()
+                );
                 for data_column_sidecar in data_column_sidecars {
                     self.controller
                         .on_el_data_column_sidecar(data_column_sidecar);
                 }
             }
 
-            // Request remaining missing data column sidecars from P2P
-            let missing_data_column_identifiers = data_column_identifiers
-                .into_iter()
-                .filter(|identifier| !self.received_data_column_sidecars.contains_key(identifier))
-                .collect::<Vec<_>>();
+            if !self.controller.contains_block(block_root) {
+                // Request remaining missing data column sidecars from P2P
+                let missing_data_column_identifiers = missing_columns_indices
+                    .into_iter()
+                    .map(|index| DataColumnIdentifier { block_root, index })
+                    .filter(|identifier| {
+                        !self.received_data_column_sidecars.contains_key(&identifier)
+                    })
+                    .collect::<Vec<_>>();
 
-            debug!(
-                "missing data columns sidecars after fetching from EL: [{}] at block {block_root}",
-                missing_data_column_identifiers
-                    .iter()
-                    .map(|id| id.index)
-                    .join(", "),
-            );
+                debug!(
+                    "missing data columns sidecars after fetching from EL: [{}] at block {block_root}",
+                    missing_data_column_identifiers
+                        .iter()
+                        .map(|id| id.index)
+                        .join(", "),
+                );
 
-            if !missing_data_column_identifiers.is_empty() {
-                BlobFetcherToP2p::DataColumnsNeeded(missing_data_column_identifiers, slot)
-                    .send(&self.p2p_tx);
+                if !missing_data_column_identifiers.is_empty() {
+                    BlobFetcherToP2p::DataColumnsNeeded(missing_data_column_identifiers, slot)
+                        .send(&self.p2p_tx);
+                }
             }
         }
     }
