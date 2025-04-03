@@ -31,6 +31,7 @@ use fork_choice_store::{
 use futures::channel::{mpsc::Sender as MultiSender, oneshot::Sender as OneshotSender};
 use genesis::AnchorCheckpointProvider;
 use http_api_utils::EventChannels;
+use log::debug;
 use prometheus_metrics::Metrics;
 use std_ext::ArcExt as _;
 use thiserror::Error;
@@ -42,7 +43,10 @@ use types::{
     deneb::containers::BlobSidecar,
     fulu::{containers::DataColumnSidecar, primitives::ColumnIndex},
     nonstandard::ValidationOutcome,
-    phase0::primitives::{ExecutionBlockHash, Slot, SubnetId, H256},
+    phase0::{
+        containers::BeaconBlockHeader,
+        primitives::{ExecutionBlockHash, Slot, SubnetId, H256},
+    },
     preset::Preset,
     traits::SignedBeaconBlock as _,
 };
@@ -525,6 +529,21 @@ where
         block_seen: bool,
         peer_id: PeerId,
     ) {
+        let block_header = data_column_sidecar.signed_block_header.message;
+        if !self.store_snapshot().is_forward_synced()
+            && self
+                .store_snapshot()
+                .accepted_data_column_sidecar(block_header, data_column_sidecar.index)
+        {
+            debug!(
+                "received data column sidecar has been accepted, ignore this one from peer {peer_id} \
+                 (index: {}, slot: {})",
+                data_column_sidecar.index,
+                data_column_sidecar.slot(),
+            );
+            return;
+        }
+
         self.spawn(DataColumnSidecarTask {
             store_snapshot: self.owned_store_snapshot(),
             mutator_tx: self.owned_mutator_tx(),
@@ -628,6 +647,23 @@ where
         block_seen: bool,
         origin: DataColumnSidecarOrigin,
     ) {
+        // During syncing, prevent spawning task if the sidecar has been accepted.
+        // On the other hand, forward it to the `mutator` to allow distributed publishing if it is synced.
+        let block_header = data_column_sidecar.signed_block_header.message;
+        if !self.store_snapshot().is_forward_synced()
+            && self
+                .store_snapshot()
+                .accepted_data_column_sidecar(block_header, data_column_sidecar.index)
+        {
+            debug!(
+                "received data column sidecar has been accepted, ignore this one from {origin:?} \
+                 (index: {}, slot: {})",
+                data_column_sidecar.index,
+                data_column_sidecar.slot(),
+            );
+            return;
+        }
+
         self.spawn(DataColumnSidecarTask {
             store_snapshot: self.owned_store_snapshot(),
             mutator_tx: self.owned_mutator_tx(),
@@ -695,6 +731,15 @@ where
 
     pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
         self.store_snapshot().sampling_columns()
+    }
+
+    pub fn accepted_data_column_sidecar(
+        &self,
+        block_header: BeaconBlockHeader,
+        index: ColumnIndex,
+    ) -> bool {
+        self.store_snapshot()
+            .accepted_data_column_sidecar(block_header, index)
     }
 
     pub(crate) fn store_snapshot(&self) -> Guard<Arc<Store<P, Storage<P>>>> {
