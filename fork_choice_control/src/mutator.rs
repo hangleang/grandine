@@ -1517,11 +1517,6 @@ where
             {
                 let slot = block.message().slot();
 
-                debug!(
-                    "handling data column sidecars reconstruction (slot: {slot}, missing columns: [{}])",
-                    missing_indices.iter().join(", "),
-                );
-
                 self.store_mut()
                     .mark_started_sidecars_construction(block_root, slot);
                 self.update_store_snapshot();
@@ -1801,9 +1796,13 @@ where
 
         debug!("block accepted (block_root: {block_root:?}, block: {block:?}, origin: {origin:?})");
 
+        // TODO(peerdas-fulu): NEED REVIEW! if block proposed by itself, therefore all sampling
+        // columns should be arrived soon or later, so no need to trigger reconstruction.
+        //
         // Once block accepted while still having any missed columns, reconstruct!
         if block.phase().is_peerdas_activated()
             && self.store.is_forward_synced()
+            && !matches!(origin, BlockOrigin::Own)
             && !self.store.indices_of_missing_data_columns(block).is_empty()
         {
             self.handle_reconstructing_data_column_sidecars(block.clone_arc());

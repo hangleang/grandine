@@ -528,19 +528,24 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
         } = self;
 
         if let Some(body) = block.message().body().post_deneb() {
-            let block_root = block.message().hash_tree_root();
-            let available_columns = store_snapshot.available_columns_at_block(block_root);
+            let missing_indices = store_snapshot.indices_of_missing_data_columns(&block);
 
             // Final check to avoid unnecessary computation
-            if available_columns.len() < store_snapshot.sampling_columns_count() {
-                debug!("triggering reconstruction at block {block_root}");
-                let blob_count = body.blob_kzg_commitments().len();
+            if !missing_indices.is_empty() {
+                let block_root = block.message().hash_tree_root();
+                let available_columns = store_snapshot.available_columns_at_block(block_root);
                 let partial_matrix = available_columns
                     .into_iter()
                     .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
                     .collect::<Vec<_>>();
 
-                match eip_7594::recover_matrix(&partial_matrix, blob_count) {
+                debug!(
+                    "handling data column sidecars reconstruction (slot: {}, missing columns: {:?})",
+                    block.message().slot(),
+                    missing_indices,
+                );
+
+                match eip_7594::recover_matrix(&partial_matrix, body.blob_kzg_commitments().len()) {
                     Ok(full_matrix) => {
                         MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
                             .send(&mutator_tx);
