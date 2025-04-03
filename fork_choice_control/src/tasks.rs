@@ -528,6 +528,7 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
 
             // Final check to avoid unnecessary computation
             if available_columns.len() < store_snapshot.sampling_columns_count() {
+                debug!("triggering reconstruction at block {block_root}");
                 let blob_count = body.blob_kzg_commitments().len();
                 let partial_matrix = available_columns
                     .into_iter()

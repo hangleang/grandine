@@ -1281,15 +1281,20 @@ where
                     ));
                 }
 
-                let (gossip_id, sender) = origin.split();
+                if !self
+                    .store
+                    .accepted_data_column_sidecar(&data_column_sidecar)
+                {
+                    let (gossip_id, sender) = origin.split();
 
-                if let Some(gossip_id) = gossip_id {
-                    self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                    if let Some(gossip_id) = gossip_id {
+                        self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                    }
+
+                    reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
+
+                    self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
                 }
-
-                reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
-
-                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
             }
             Ok(DataColumnSidecarAction::Ignore(publishable)) => {
                 let (gossip_id, sender) = origin.split();

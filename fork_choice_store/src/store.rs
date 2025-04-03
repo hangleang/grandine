@@ -1987,6 +1987,11 @@ impl<P: Preset> Store<P> {
         let block_header = data_column_sidecar.signed_block_header.message;
         let block_root = block_header.hash_tree_root();
 
+        // TODO(peerdas-fulu): NEED REVIEW! since now Grandine import block earlier when only half
+        // of columns are received, so the rest will be reconstructed and backfilling. Given the
+        // condition here, Grandine might ignore some of those columns, which is not the expected
+        // behavior.
+        //
         // No need to validate and import data column sidecars for blocks that are already in fork choice,
         // i.e. already have all the data columns validated
         if self.contains_block(block_root) {
@@ -2533,6 +2538,19 @@ impl<P: Preset> Store<P> {
             .keys()
             .filter(|(s, _, _)| *s == slot)
             .count()
+    }
+
+    pub fn accepted_data_column_sidecar(
+        &self,
+        data_column_sidecar: &Arc<DataColumnSidecar<P>>,
+    ) -> bool {
+        let block_header = data_column_sidecar.signed_block_header.message;
+
+        self.accepted_data_column_sidecars.contains_key(&(
+            block_header.slot,
+            block_header.proposer_index,
+            data_column_sidecar.index,
+        ))
     }
 
     fn insert_block(&mut self, chain_link: ChainLink<P>) -> Result<()> {

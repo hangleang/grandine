@@ -217,10 +217,6 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
 
                 match self.api.get_blobs_v2::<P>(versioned_hashes).await {
                     Ok(blobs_and_proofs) => {
-                        // TODO(feature/fulu): use EL constructed `cells_proofs` with extended `cells`
-                        // from `compute_cells` method once it is implemented, because it is cheaper
-                        // than computing cells and cells_proofs in CL alone, so faster time to
-                        // construct data column sidecars.
                         let (received_blobs, cells_proofs): (Vec<_>, Vec<_>) = blobs_and_proofs
                             .into_iter()
                             .filter_map(|blob_and_proof| {
@@ -256,17 +252,14 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                                 self.controller.chain_config(),
                                             ) {
                                                 Ok(data_columns) => {
-                                                    debug!(
-                                                        "constructed data columns count: {}",
-                                                        data_columns.len()
-                                                    );
                                                     self.sidecars_construction_started
                                                         .insert(block_root, slot);
 
-                                                    let mut sampling_columns = self
+                                                    let sampling_columns = self
                                                         .controller
                                                         .sampling_columns()
-                                                        .into_iter();
+                                                        .into_iter()
+                                                        .collect::<Vec<_>>();
 
                                                     for data_column_sidecar in
                                                         data_columns.into_iter().filter(|column| {
@@ -318,11 +311,6 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                     Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),
                 }
 
-                debug!(
-                    "after EL (missing: {}, received: {})",
-                    missing_columns_indices.len(),
-                    data_column_sidecars.len()
-                );
                 for data_column_sidecar in data_column_sidecars {
                     self.controller
                         .on_el_data_column_sidecar(data_column_sidecar);
