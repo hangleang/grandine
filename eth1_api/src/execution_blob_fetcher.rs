@@ -242,7 +242,10 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                                 .collect::<Result<Vec<_>>>()
                             {
                                 Ok(ext_proofs) => {
-                                    match eip_7594::try_compute_ext_cells::<P>(received_blobs) {
+                                    match eip_7594::try_compute_ext_cells::<P>(
+                                        received_blobs,
+                                        self.controller.store_config().kzg_backend,
+                                    ) {
                                         Ok(ext_cells) => {
                                             let cells_and_kzg_proofs = ext_cells
                                                 .into_iter()
