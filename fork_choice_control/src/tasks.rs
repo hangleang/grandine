@@ -545,7 +545,11 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
                     missing_indices,
                 );
 
-                match eip_7594::recover_matrix(&partial_matrix, body.blob_kzg_commitments().len()) {
+                match eip_7594::recover_matrix(
+                    &partial_matrix,
+                    body.blob_kzg_commitments().len(),
+                    store_snapshot.store_config().kzg_backend,
+                ) {
                     Ok(full_matrix) => {
                         MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
                             .send(&mutator_tx);

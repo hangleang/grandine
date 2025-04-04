@@ -284,12 +284,14 @@ fn test_compute_cells(case: Case) {
         }
     };
 
-    match compute_cells::<Mainnet>(&blob) {
-        Ok(cells) => {
-            assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
-        }
-        Err(_) => {
-            assert!(test.output.is_none());
+    for backend in available_backends() {
+        match compute_cells::<Mainnet>(&blob, backend) {
+            Ok(cells) => {
+                assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
+            }
+            Err(_) => {
+                assert!(test.output.is_none());
+            }
         }
     }
 }
@@ -314,13 +316,15 @@ fn test_compute_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    match compute_cells_and_kzg_proofs::<Mainnet>(&blob) {
-        Ok((cells, proofs)) => {
-            assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
-            assert_eq!(proofs.into_iter().collect::<Vec<_>>(), expected_proofs);
-        }
-        Err(_) => {
-            assert!(test.output.is_none());
+    for backend in available_backends() {
+        match compute_cells_and_kzg_proofs::<Mainnet>(&blob, backend) {
+            Ok((cells, proofs)) => {
+                assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
+                assert_eq!(proofs.into_iter().collect::<Vec<_>>(), expected_proofs);
+            }
+            Err(_) => {
+                assert!(test.output.is_none());
+            }
         }
     }
 }
@@ -328,12 +332,12 @@ fn test_compute_cells_and_kzg_proofs(case: Case) {
 #[test_resources("consensus-spec-tests/tests/general/fulu/kzg/recover_cells_and_kzg_proofs/*/*")]
 fn test_recover_cells_and_kzg_proofs(case: Case) {
     let test: containers::recover_cells_and_kzg_proofs::Test = case.yaml("data");
+    let containers::recover_cells_and_kzg_proofs::Input {
+        cell_indices,
+        cells,
+    } = &test.input;
 
-    let cell_indices = test.input.cell_indices.clone();
-
-    let cells = match test
-        .input
-        .cells
+    let cells = match cells
         .iter()
         .map(|cell| deserialize(cell))
         .collect::<Result<Vec<Cell<Mainnet>>, _>>()
@@ -353,14 +357,17 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
         }
     };
 
-    let result = recover_cells_and_kzg_proofs::<Mainnet>(cell_indices, cells.iter());
-    match result {
-        Ok((cells, proofs)) => {
-            assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
-            assert_eq!(proofs.into_iter().collect::<Vec<_>>(), expected_proofs);
-        }
-        Err(_) => {
-            assert!(test.output.is_none());
+    for backend in available_backends() {
+        let result =
+            recover_cells_and_kzg_proofs::<Mainnet>(cell_indices.clone(), cells.iter(), backend);
+        match result {
+            Ok((cells, proofs)) => {
+                assert_eq!(cells.into_iter().collect::<Vec<_>>(), expected_cells);
+                assert_eq!(proofs.into_iter().collect::<Vec<_>>(), expected_proofs);
+            }
+            Err(_) => {
+                assert!(test.output.is_none());
+            }
         }
     }
 }
@@ -368,10 +375,14 @@ fn test_recover_cells_and_kzg_proofs(case: Case) {
 #[test_resources("consensus-spec-tests/tests/general/fulu/kzg/verify_cell_kzg_proof_batch/*/*")]
 fn test_verify_cell_kzg_proof_batch(case: Case) {
     let test: containers::verify_cell_kzg_proof_batch::Test = case.yaml("data");
+    let containers::verify_cell_kzg_proof_batch::Input {
+        commitments,
+        cell_indices,
+        cells,
+        proofs,
+    } = &test.input;
 
-    let commitments = match test
-        .input
-        .commitments
+    let commitments = match commitments
         .iter()
         .map(|c| deserialize(c))
         .collect::<Result<Vec<_>, _>>()
@@ -383,11 +394,7 @@ fn test_verify_cell_kzg_proof_batch(case: Case) {
         }
     };
 
-    let cell_indices = test.input.cell_indices.clone();
-
-    let cells = match test
-        .input
-        .cells
+    let cells = match cells
         .iter()
         .map(|cell| deserialize(cell))
         .collect::<Result<Vec<_>, _>>()
@@ -399,9 +406,7 @@ fn test_verify_cell_kzg_proof_batch(case: Case) {
         }
     };
 
-    let proofs = match test
-        .input
-        .proofs
+    let proofs = match proofs
         .iter()
         .map(|proof| deserialize(proof))
         .collect::<Result<Vec<_>, _>>()
@@ -413,13 +418,21 @@ fn test_verify_cell_kzg_proof_batch(case: Case) {
         }
     };
 
-    match verify_cell_kzg_proof_batch::<Mainnet>(&commitments, cell_indices, &cells, &proofs) {
-        Ok(output) => {
-            let expected_output = test.output.expect("test output should exist");
-            assert_eq!(output, expected_output);
-        }
-        Err(_) => {
-            assert!(test.output.is_none());
+    for backend in available_backends() {
+        match verify_cell_kzg_proof_batch::<Mainnet>(
+            &commitments,
+            cell_indices.clone(),
+            &cells,
+            &proofs,
+            backend,
+        ) {
+            Ok(output) => {
+                let expected_output = test.output.expect("test output should exist");
+                assert_eq!(output, expected_output);
+            }
+            Err(_) => {
+                assert!(test.output.is_none());
+            }
         }
     }
 }

@@ -3,9 +3,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use anyhow::{ensure, Result};
 use helper_functions::{misc, predicates::is_valid_merkle_branch};
 use itertools::Itertools as _;
-use kzg_utils::eip_7594::{
-    compute_cells, compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs,
-    verify_cell_kzg_proof_batch,
+use kzg_utils::{
+    eip_7594::{
+        compute_cells, compute_cells_and_kzg_proofs, recover_cells_and_kzg_proofs,
+        verify_cell_kzg_proof_batch,
+    },
+    KzgBackend,
 };
 use num_traits::One as _;
 use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, ParallelIterator as _};
@@ -163,7 +166,10 @@ pub fn verify_data_column_sidecar<P: Preset>(
 }
 
 /// Verify if the KZG proofs are correct.
-pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) -> Result<bool> {
+pub fn verify_kzg_proofs<P: Preset>(
+    data_column_sidecar: &DataColumnSidecar<P>,
+    backend: KzgBackend,
+) -> Result<bool> {
     #[cfg(feature = "metrics")]
     let _timer = METRICS.get().map(|metrics| {
         metrics
@@ -181,7 +187,7 @@ pub fn verify_kzg_proofs<P: Preset>(data_column_sidecar: &DataColumnSidecar<P>) 
 
     let cell_indices: Vec<u64> = vec![*index; column.len()];
 
-    verify_cell_kzg_proof_batch::<P>(kzg_commitments, cell_indices, column, kzg_proofs)
+    verify_cell_kzg_proof_batch::<P>(kzg_commitments, cell_indices, column, kzg_proofs, backend)
 }
 
 pub fn verify_sidecar_inclusion_proof<P: Preset>(
@@ -218,12 +224,15 @@ pub fn verify_sidecar_inclusion_proof<P: Preset>(
  *
  * This helper demonstrates the relationship between blobs and the matrix of cells/proofs.
  */
-pub fn compute_matrix<P: Preset>(blobs: Vec<Blob<P>>) -> Result<Vec<MatrixEntry<P>>> {
+pub fn compute_matrix<P: Preset>(
+    blobs: Vec<Blob<P>>,
+    backend: KzgBackend,
+) -> Result<Vec<MatrixEntry<P>>> {
     let all_matrix = blobs
         .into_par_iter()
         .enumerate()
         .map(|(blob_index, blob)| {
-            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(&blob)?;
+            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(&blob, backend)?;
             cells
                 .into_iter()
                 .zip(proofs)
@@ -252,6 +261,7 @@ pub fn compute_matrix<P: Preset>(blobs: Vec<Blob<P>>) -> Result<Vec<MatrixEntry<
 pub fn recover_matrix<P: Preset>(
     partial_matrix: &[MatrixEntry<P>],
     blob_count: usize,
+    backend: KzgBackend,
 ) -> Result<Vec<MatrixEntry<P>>> {
     #[cfg(feature = "metrics")]
     let _timer = METRICS
@@ -269,7 +279,7 @@ pub fn recover_matrix<P: Preset>(
                 .unzip();
 
             let (recovered_cells, recovered_proofs) =
-                recover_cells_and_kzg_proofs::<P>(cell_indices, cells)?;
+                recover_cells_and_kzg_proofs::<P>(cell_indices, cells, backend)?;
 
             recovered_cells
                 .into_iter()
@@ -342,17 +352,21 @@ pub fn construct_data_column_sidecars<P: Preset>(
 
 pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
     blobs: Vec<Blob<P>>,
+    backend: KzgBackend,
 ) -> Result<Vec<CellsAndKzgProofs<P>>> {
     blobs
         .into_par_iter()
-        .map(|blob| compute_cells_and_kzg_proofs::<P>(&blob))
+        .map(|blob| compute_cells_and_kzg_proofs::<P>(&blob, backend))
         .collect::<Result<Vec<_>>>()
 }
 
-pub fn try_compute_ext_cells<P: Preset>(blobs: Vec<Blob<P>>) -> Result<Vec<ExtCells<P>>> {
+pub fn try_compute_ext_cells<P: Preset>(
+    blobs: Vec<Blob<P>>,
+    backend: KzgBackend,
+) -> Result<Vec<ExtCells<P>>> {
     blobs
         .into_par_iter()
-        .map(|blob| compute_cells::<P>(&blob))
+        .map(|blob| compute_cells::<P>(&blob, backend))
         .collect::<Result<Vec<_>>>()
 }
 
