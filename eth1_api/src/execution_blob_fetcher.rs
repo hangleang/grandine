@@ -229,8 +229,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
 
                         if received_blobs.len() == expected_blob_count {
                             debug!(
-                                "received all {} blob sidecars from EL at slot: {slot}",
-                                expected_blob_count
+                                "received all {expected_blob_count} blob sidecars from EL at slot: {slot}",
                             );
 
                             match cells_proofs
@@ -243,7 +242,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                             {
                                 Ok(ext_proofs) => {
                                     match eip_7594::try_compute_ext_cells::<P>(
-                                        received_blobs,
+                                        &received_blobs,
                                         self.controller.store_config().kzg_backend,
                                     ) {
                                         Ok(ext_cells) => {

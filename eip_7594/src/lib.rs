@@ -11,7 +11,7 @@ use kzg_utils::{
     KzgBackend,
 };
 use num_traits::One as _;
-use rayon::iter::{IndexedParallelIterator as _, IntoParallelIterator as _, ParallelIterator as _};
+use rayon::iter::{IntoParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _};
 use sha2::{Digest as _, Sha256};
 use ssz::{ContiguousList, ContiguousVector, SszHash as _, Uint256};
 use try_from_iterator::TryFromIterator as _;
@@ -225,32 +225,10 @@ pub fn verify_sidecar_inclusion_proof<P: Preset>(
  * This helper demonstrates the relationship between blobs and the matrix of cells/proofs.
  */
 pub fn compute_matrix<P: Preset>(
-    blobs: Vec<Blob<P>>,
+    blobs: &[Blob<P>],
     backend: KzgBackend,
 ) -> Result<Vec<MatrixEntry<P>>> {
-    let all_matrix = blobs
-        .into_par_iter()
-        .enumerate()
-        .map(|(blob_index, blob)| {
-            let (cells, proofs) = compute_cells_and_kzg_proofs::<P>(&blob, backend)?;
-            cells
-                .into_iter()
-                .zip(proofs)
-                .enumerate()
-                .map(move |(cell_index, (cell, kzg_proof))| {
-                    Ok(MatrixEntry {
-                        cell,
-                        kzg_proof,
-                        row_index: blob_index as u64,
-                        column_index: cell_index as u64,
-                    })
-                })
-                .collect::<Result<Vec<MatrixEntry<P>>>>()
-        })
-        .collect::<Result<Vec<Vec<MatrixEntry<P>>>>>();
-
-    // itertools::process_results(all_matrix.into_iter(), |i| i.flatten().collect())
-    all_matrix.map(|matrix| matrix.into_iter().flatten().collect())
+    try_convert_to_cells_and_kzg_proofs::<P>(blobs, backend).map(construct_full_matrix)
 }
 
 /**
@@ -268,36 +246,21 @@ pub fn recover_matrix<P: Preset>(
         .get()
         .map(|metrics| metrics.columns_reconstruction_time.start_timer());
 
-    let matrix = (0..blob_count)
-        .into_par_iter()
-        .map(|blob_index| {
-            let (cell_indices, cells): (Vec<_>, Vec<_>) = partial_matrix
-                .iter()
-                .filter_map(|e| {
-                    (e.row_index == blob_index as u64).then_some((e.column_index, &e.cell))
-                })
-                .unzip();
+    // TODO(peerdas-fulu): group once by row_index
+    // let cells_indices_and_cells = partial_matrix
+    //     .iter()
+    //     .chunk_by(|matrix| matrix.row_index)
+    //     .into_iter()
+    //     .map(|(row_index, entries)| {
+    //         (
+    //             row_index,
+    //             entries.map(|e| (e.column_index, &e.cell)).unzip(),
+    //         )
+    //     })
+    //     .collect::<BTreeMap<_, (Vec<_>, Vec<_>)>>();
 
-            let (recovered_cells, recovered_proofs) =
-                recover_cells_and_kzg_proofs::<P>(cell_indices, cells, backend)?;
-
-            recovered_cells
-                .into_iter()
-                .zip(recovered_proofs)
-                .enumerate()
-                .map(move |(cell_index, (cell, kzg_proof))| {
-                    Ok(MatrixEntry {
-                        cell,
-                        kzg_proof,
-                        row_index: blob_index as u64,
-                        column_index: cell_index as u64,
-                    })
-                })
-                .collect::<Result<Vec<MatrixEntry<P>>>>()
-        })
-        .collect::<Result<Vec<Vec<MatrixEntry<P>>>>>();
-
-    matrix.map(|matrix| matrix.into_iter().flatten().collect())
+    try_recover_cells_and_kzg_proofs::<P>(partial_matrix, blob_count as u64, backend)
+        .map(construct_full_matrix)
 }
 
 pub fn construct_data_column_sidecars<P: Preset>(
@@ -351,22 +314,40 @@ pub fn construct_data_column_sidecars<P: Preset>(
 }
 
 pub fn try_convert_to_cells_and_kzg_proofs<P: Preset>(
-    blobs: Vec<Blob<P>>,
+    blobs: &[Blob<P>],
     backend: KzgBackend,
 ) -> Result<Vec<CellsAndKzgProofs<P>>> {
     blobs
-        .into_par_iter()
-        .map(|blob| compute_cells_and_kzg_proofs::<P>(&blob, backend))
+        .par_iter()
+        .map(|blob| compute_cells_and_kzg_proofs::<P>(blob, backend))
         .collect::<Result<Vec<_>>>()
 }
 
 pub fn try_compute_ext_cells<P: Preset>(
-    blobs: Vec<Blob<P>>,
+    blobs: &[Blob<P>],
     backend: KzgBackend,
 ) -> Result<Vec<ExtCells<P>>> {
     blobs
+        .par_iter()
+        .map(|blob| compute_cells::<P>(blob, backend))
+        .collect::<Result<Vec<_>>>()
+}
+
+pub fn try_recover_cells_and_kzg_proofs<P: Preset>(
+    partial_matrix: &[MatrixEntry<P>],
+    blob_count: u64,
+    backend: KzgBackend,
+) -> Result<Vec<CellsAndKzgProofs<P>>> {
+    (0..blob_count)
         .into_par_iter()
-        .map(|blob| compute_cells::<P>(&blob, backend))
+        .map(|blob_index| {
+            let (cell_indices, cells): (Vec<_>, Vec<_>) = partial_matrix
+                .iter()
+                .filter_map(|e| (e.row_index == blob_index).then_some((e.column_index, &e.cell)))
+                .unzip();
+
+            recover_cells_and_kzg_proofs::<P>(cell_indices, cells, backend)
+        })
         .collect::<Result<Vec<_>>>()
 }
 
@@ -384,4 +365,25 @@ pub fn construct_cells_and_kzg_proofs<P: Preset>(
     }
 
     Ok(result.into_values().collect())
+}
+
+fn construct_full_matrix<P: Preset>(
+    cells_and_kzg_proofs: Vec<CellsAndKzgProofs<P>>,
+) -> Vec<MatrixEntry<P>> {
+    cells_and_kzg_proofs
+        .into_iter()
+        .enumerate()
+        .flat_map(|(blob_index, (cells, proofs))| {
+            cells
+                .into_iter()
+                .zip(proofs)
+                .enumerate()
+                .map(move |(cell_index, (cell, kzg_proof))| MatrixEntry {
+                    cell,
+                    kzg_proof,
+                    row_index: blob_index as u64,
+                    column_index: cell_index as u64,
+                })
+        })
+        .collect()
 }

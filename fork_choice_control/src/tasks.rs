@@ -539,28 +539,32 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
             if !missing_indices.is_empty() {
                 let block_root = block.message().hash_tree_root();
                 let available_columns = store_snapshot.available_columns_at_block(block_root);
-                let partial_matrix = available_columns
-                    .into_iter()
-                    .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
-                    .collect::<Vec<_>>();
 
-                debug!(
-                    "handling data column sidecars reconstruction (slot: {}, missing columns: {:?})",
-                    block.message().slot(),
-                    missing_indices,
-                );
+                if available_columns.len() * 2 >= store_snapshot.chain_config().number_of_columns()
+                {
+                    let partial_matrix = available_columns
+                        .into_iter()
+                        .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
+                        .collect::<Vec<_>>();
 
-                match eip_7594::recover_matrix(
-                    &partial_matrix,
-                    body.blob_kzg_commitments().len(),
-                    store_snapshot.store_config().kzg_backend,
-                ) {
-                    Ok(full_matrix) => {
-                        MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
-                            .send(&mutator_tx);
-                    }
-                    Err(error) => {
-                        warn!("failed to reconstruct missing data column sidecars: {error:?}");
+                    debug!(
+                        "handling data column sidecars reconstruction (slot: {}, missing columns: {:?})",
+                        block.message().slot(),
+                        missing_indices,
+                    );
+
+                    match eip_7594::recover_matrix(
+                        &partial_matrix,
+                        body.blob_kzg_commitments().len(),
+                        store_snapshot.store_config().kzg_backend,
+                    ) {
+                        Ok(full_matrix) => {
+                            MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
+                                .send(&mutator_tx);
+                        }
+                        Err(error) => {
+                            warn!("failed to reconstruct missing data column sidecars: {error:?}");
+                        }
                     }
                 }
             }
