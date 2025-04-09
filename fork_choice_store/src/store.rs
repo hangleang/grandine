@@ -1163,16 +1163,13 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             && data_availability_policy.check()
         {
             if state.phase().is_peerdas_activated() {
-                let missing_indices = self.indices_of_missing_data_columns(block);
-                let number_of_columns = self.chain_config.number_of_columns();
-
                 // While syncing, require all custody columns plus extra sampling to be available,
                 // Otherwise, accept block if more than half of columns are available, the rest can
                 // be reconstruct later using `recover_matrix` method.
-                if !missing_indices.is_empty()
+                if !self.indices_of_missing_data_columns(block).is_empty()
                     && (!self.is_forward_synced()
-                        || (self.sampling_columns_count() * 2 < number_of_columns
-                            || missing_indices.len() * 2 > number_of_columns))
+                        || self.available_columns_at_block(block_root).len() * 2
+                            < self.chain_config.number_of_columns())
                 {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc()));
                 }
@@ -3727,10 +3724,10 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     }
 
     pub fn available_columns_at_block(&self, block_root: H256) -> Vec<Arc<DataColumnSidecar<P>>> {
-        (0..self.chain_config.number_of_columns)
-            .filter_map(|index| {
-                self.data_column_cache
-                    .get(DataColumnIdentifier { block_root, index })
+        self.sampling_columns
+            .iter()
+            .filter_map(|&index| {
+                self.cached_data_column_sidecar_by_id(DataColumnIdentifier { block_root, index })
             })
             .collect()
     }

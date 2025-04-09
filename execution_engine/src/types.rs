@@ -985,41 +985,12 @@ pub struct BlobAndProofV1<P: Preset> {
     pub proof: KzgProof,
 }
 
-// pub type GetBlobsV1Response<P> = Vec<Option<BlobAndProofV1<P>>>;
-
 #[derive(Deserialize)]
 #[serde(bound = "", rename_all = "camelCase")]
 pub struct BlobAndProofV2<P: Preset> {
     pub blob: Blob<P>,
     pub proofs: Arc<ContiguousVector<KzgProof, P::CellsPerExtBlob>>,
 }
-
-// pub type GetBlobsV2Response<P> = Vec<Option<BlobAndProofV2<P>>>;
-
-// #[derive(Deserialize)]
-// #[serde(bound = "", deny_unknown_fields)]
-// pub enum EngineGetBlobsResponse<P: Preset> {
-//     V1(GetBlobsV1Response<P>),
-//     V2(GetBlobsV2Response<P>),
-// }
-
-// impl<P: Preset> From<GetBlobsV1Response<P>> for EngineGetBlobsResponse<P> {
-//     fn from(response: GetBlobsV1Response<P>) -> Self {
-//         Self::V1(response)
-//     }
-// }
-
-// impl<P: Preset> From<GetBlobsV2Response<P>> for EngineGetBlobsResponse<P> {
-//     fn from(response: GetBlobsV2Response<P>) -> Self {
-//         Self::V2(response)
-//     }
-// }
-
-// #[derive(Clone, Debug)]
-// pub enum BlobVersionedHashes {
-//     V1(Vec<VersionedHash>),
-//     V2(Vec<VersionedHash>),
-// }
 
 pub enum EngineGetBlobsParams {
     Blobs(Vec<BlobIdentifier>),

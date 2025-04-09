@@ -742,10 +742,8 @@ pub fn compute_matrix_for_data_column_sidecar<P: Preset>(
 
     let blob_count = column.len() as u64;
 
-    (0..blob_count)
-        .zip(column)
-        .zip(kzg_proofs)
-        .map(|((row_index, cell), kzg_proof)| MatrixEntry {
+    izip!(0..blob_count, column, kzg_proofs)
+        .map(|(row_index, cell, kzg_proof)| MatrixEntry {
             row_index,
             column_index: *index,
             cell: cell.clone(),

@@ -243,7 +243,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                             {
                                 Ok(ext_proofs) => {
                                     match eip_7594::try_compute_ext_cells::<P>(
-                                        received_blobs,
+                                        &received_blobs,
                                         self.controller.store_config().kzg_backend,
                                     ) {
                                         Ok(ext_cells) => {

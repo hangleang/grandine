@@ -102,7 +102,7 @@ pub fn compute_cells_and_kzg_proofs<P: Preset>(
 ) -> Result<CellsAndKzgProofs<P>> {
     let raw_blob = blob.as_bytes().try_into()?;
 
-    let (cells, proofs) = match backend {
+    let (raw_cells, raw_proofs) = match backend {
         #[cfg(feature = "arkworks")]
         KzgBackend::Arkworks => compute_cells_and_kzg_proofs_raw::<ArkBackend>(
             raw_blob,
@@ -133,14 +133,16 @@ pub fn compute_cells_and_kzg_proofs<P: Preset>(
         )
         .map_err(KzgError::KzgError)?,
     };
-    let cells = cells
+
+    let cells = raw_cells
         .into_iter()
         .map(try_convert_to_cell::<P>)
         .collect::<Result<Vec<_>>>()?;
-    let cells = ContiguousVector::try_from_iter(cells)?;
-    let proofs = ContiguousVector::try_from_iter(proofs.into_iter().map(Into::into))?;
 
-    Ok((cells, proofs))
+    let ext_cells = ContiguousVector::try_from_iter(cells)?;
+    let ext_proofs = ContiguousVector::try_from_iter(raw_proofs.into_iter().map(Into::into))?;
+
+    Ok((ext_cells, ext_proofs))
 }
 
 pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
@@ -158,7 +160,7 @@ pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
         .map(|c| c.as_bytes().try_into().map_err(Into::into))
         .collect::<Result<Vec<_>>>()?;
 
-    let (cells, proofs) = match backend {
+    let (raw_cells, raw_proofs) = match backend {
         #[cfg(feature = "arkworks")]
         KzgBackend::Arkworks => recover_cells_and_kzg_proofs_raw::<ArkBackend>(
             &cell_indices,
@@ -196,14 +198,14 @@ pub fn recover_cells_and_kzg_proofs<'cell, P: Preset>(
         .map_err(KzgError::KzgError)?,
     };
 
-    let cells = cells
+    let cells = raw_cells
         .into_iter()
         .map(try_convert_to_cell::<P>)
         .collect::<Result<Vec<_>>>()?;
-    let cells = ContiguousVector::try_from_iter(cells)?;
-    let proofs = ContiguousVector::try_from_iter(proofs.into_iter().map(Into::into))?;
+    let ext_cells = ContiguousVector::try_from_iter(cells)?;
+    let ext_proofs = ContiguousVector::try_from_iter(raw_proofs.into_iter().map(Into::into))?;
 
-    Ok((cells, proofs))
+    Ok((ext_cells, ext_proofs))
 }
 
 pub fn compute_cells<P: Preset>(
@@ -212,7 +214,7 @@ pub fn compute_cells<P: Preset>(
 ) -> Result<ContiguousVector<Cell<P>, P::CellsPerExtBlob>> {
     let raw_blob = blob.as_bytes().try_into()?;
 
-    let cells = match backend {
+    let raw_cells = match backend {
         #[cfg(feature = "arkworks")]
         KzgBackend::Arkworks => {
             compute_cells_raw::<ArkBackend>(raw_blob, trusted_setup::arkworks_settings())
@@ -237,7 +239,8 @@ pub fn compute_cells<P: Preset>(
                 .map_err(KzgError::KzgError)?
         }
     };
-    let cells = cells
+
+    let cells = raw_cells
         .into_iter()
         .map(try_convert_to_cell::<P>)
         .collect::<Result<Vec<_>>>()?;

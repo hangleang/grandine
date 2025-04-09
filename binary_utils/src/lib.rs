@@ -23,7 +23,7 @@ pub fn initialize_logger(module_path: &str, always_write_style: bool) -> Result<
         .filter_module("eth2_libp2p", LevelFilter::Info)
         .filter_module("execution_engine", LevelFilter::Info)
         .filter_module("features", LevelFilter::Info)
-        .filter_module("fork_choice_control", LevelFilter::Debug)
+        .filter_module("fork_choice_control", LevelFilter::Info)
         .filter_module("fork_choice_store", LevelFilter::Info)
         .filter_module("genesis", LevelFilter::Info)
         .filter_module("http_api", LevelFilter::Info)
