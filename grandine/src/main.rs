@@ -399,6 +399,7 @@ fn try_main() -> Result<()> {
         kzg_backend,
         blacklisted_blocks,
         withhold_data_columns_publishing,
+        disable_engine_getblobs,
     } = config;
 
     features.into_iter().for_each(Feature::enable);
@@ -443,6 +444,7 @@ fn try_main() -> Result<()> {
         state_cache_lock_timeout,
         unfinalized_states_in_memory,
         kzg_backend,
+        disable_engine_getblobs,
     };
 
     let eth1_auth = Arc::new(Auth::new(auth_options)?);
