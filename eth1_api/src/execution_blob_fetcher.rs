@@ -93,7 +93,9 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 return;
             }
 
-            if self.controller.is_forward_synced() {
+            if self.controller.is_forward_synced()
+                && !self.controller.store_config().disable_engine_getblobs
+            {
                 let versioned_hashes = kzg_commitments
                     .iter()
                     .copied()
@@ -207,6 +209,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
             }
 
             if self.controller.is_forward_synced()
+                && !self.controller.store_config().disable_engine_getblobs
                 && !self.sidecars_construction_started.contains_key(&block_root)
             {
                 let versioned_hashes = body

@@ -409,6 +409,11 @@ struct BeaconNodeOptions {
     // A list beacon block roots that beacon node rejects unconditionally
     #[clap(long)]
     blacklisted_blocks: Vec<H256>,
+
+    // Disable `engine_getBlobs` integration, use purely gossip and p2p requests.
+    // Use for testing purpose
+    #[clap(long)]
+    disable_engine_getblobs: bool,
 }
 
 #[expect(
@@ -978,6 +983,7 @@ impl GrandineArgs {
             in_memory,
             kzg_backend,
             blacklisted_blocks,
+            disable_engine_getblobs,
         } = beacon_node_options;
 
         // let SlasherOptions {
@@ -1377,6 +1383,7 @@ impl GrandineArgs {
             kzg_backend,
             blacklisted_blocks: blacklisted_blocks.into_iter().collect(),
             withhold_data_columns_publishing,
+            disable_engine_getblobs,
         })
     }
 
