@@ -442,6 +442,10 @@ struct NetworkConfigOptions {
     #[clap(long)]
     disable_peer_scoring: bool,
 
+    /// Disable rate limiting both inbound and outbound
+    #[clap(long)]
+    disable_rate_limiting: bool,
+
     /// Disable NAT traversal via UPnP
     /// [default: enabled]
     #[clap(long)]
@@ -547,6 +551,7 @@ impl NetworkConfigOptions {
             disable_enr_auto_update,
             disable_quic,
             disable_peer_scoring,
+            disable_rate_limiting,
             disable_upnp,
             discovery_port,
             discovery_port_ipv6,
@@ -584,8 +589,12 @@ impl NetworkConfigOptions {
         network_config.target_subnet_peers = target_subnet_peers;
         network_config.trusted_peers = trusted_peers;
         network_config.libp2p_private_key_file = libp2p_private_key_file;
-        network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
-        network_config.outbound_rate_limiter_config = Some(OutboundRateLimiterConfig::default());
+
+        if !disable_rate_limiting {
+            network_config.inbound_rate_limiter_config = Some(InboundRateLimiterConfig::default());
+            network_config.outbound_rate_limiter_config =
+                Some(OutboundRateLimiterConfig::default());
+        }
 
         if let Some(listen_address_ipv6) = listen_address_ipv6 {
             network_config.set_ipv4_ipv6_listening_addresses(
