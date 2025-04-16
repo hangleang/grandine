@@ -336,7 +336,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                     .collect::<Vec<_>>();
 
                 debug!(
-                    "missing data columns sidecars after fetching from EL: [{}] at block {block_root}",
+                    "missing data columns sidecars: [{}] at block {block_root}",
                     missing_data_column_identifiers
                         .iter()
                         .map(|id| id.index)

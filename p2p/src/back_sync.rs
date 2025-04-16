@@ -320,7 +320,7 @@ impl<P: Preset> Batch<P> {
             .is_peerdas_activated()
         {
             return Ok(vec![]);
-        };
+        }
 
         let head_state = controller.head_state().value;
         let block_root = block.hash_tree_root();

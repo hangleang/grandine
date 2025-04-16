@@ -1404,17 +1404,17 @@ impl<P: Preset> Network<P> {
         let network_to_service_tx = self.network_to_service_tx.clone();
 
         // TODO(feature/eip7549): MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS
-        let max_request_data_column_sidecars =
-            self.controller
-                .chain_config()
-                .max_request_data_column_sidecars as usize;
+        let max_request_data_column_sidecars = self
+            .controller
+            .chain_config()
+            .max_request_data_column_sidecars;
 
         self.dedicated_executor
             .spawn(async move {
                 // > Clients MAY limit the number of blocks and sidecars in the response.
                 let data_column_ids = data_column_ids
                     .into_iter()
-                    .take(max_request_data_column_sidecars);
+                    .take(max_request_data_column_sidecars.try_into()?);
 
                 let data_column_sidecars =
                     controller.data_column_sidecars_by_ids(data_column_ids)?;
@@ -2088,7 +2088,7 @@ impl<P: Preset> Network<P> {
         };
 
         debug!(
-            "sending DataColumnsByRange request (request_id: {request_id} peer_id: {peer_id}, \
+            "sending DataColumnsByRange request (request_id: {request_id}, peer_id: {peer_id}, \
             request: {request:?})",
         );
 

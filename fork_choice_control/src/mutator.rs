@@ -579,8 +579,9 @@ where
                         .sampling_columns_count()
                         .saturating_sub(missing_column_indices.len());
 
-                    if missing_column_indices.is_empty() || self.store.is_forward_synced()
-                        && available_columns_count > 0
+                    if missing_column_indices.is_empty()
+                        || self.store.is_forward_synced()
+                            && available_columns_count > 0
                             && available_columns_count * 2
                                 >= self.store.chain_config().number_of_columns()
                     {

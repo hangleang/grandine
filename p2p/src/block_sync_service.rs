@@ -3,7 +3,10 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -19,6 +22,7 @@ use futures::{
 };
 use genesis::AnchorCheckpointProvider;
 use helper_functions::misc;
+use itertools::Itertools as _;
 use log::{debug, error, info, warn};
 use prometheus_metrics::Metrics;
 use ssz::{ContiguousList, SszReadDefault};
@@ -521,6 +525,7 @@ impl<P: Preset> BlockSyncService<P> {
                                 finalized_checkpoint.epoch);
 
                             if self.controller.chain_config().fulu_fork_epoch <= finalized_checkpoint.epoch {
+                                self.sync_manager.prune_old_data_column_range_received_response();
                                 self.received_data_column_sidecars.retain(|_, slot| *slot >= start_of_epoch);
                             } else {
                                 self.received_blob_sidecars.retain(|_, slot| *slot >= start_of_epoch);
@@ -679,55 +684,77 @@ impl<P: Preset> BlockSyncService<P> {
                 SyncTarget::DataColumnSidecar => {
                     if let Some(ref data_columns) = batch.data_columns {
                         let mut request_id = self.request_id()?;
+                        let columns_to_request = if let Some(received_response) = self
+                            .sync_manager
+                            .get_data_column_range_received(batch.start_slot)
+                        {
+                            data_columns
+                                .iter()
+                                .filter(|index| !received_response.contains(index))
+                                .copied()
+                                .collect::<HashSet<_>>()
+                        } else {
+                            data_columns.iter().copied().collect()
+                        };
 
-                        match self.sync_manager.map_peer_custody_columns(
-                            data_columns,
-                            None,
-                            Some(peer_id),
-                        ) {
-                            Ok(peer_custody_columns_mapping) => {
-                                debug!(
-                                    "retrying batch {batch:?}, request_ids: {:?}, new peers: [{:?}]",
-                                    (request_id..request_id + peer_custody_columns_mapping.len()),
-                                    peer_custody_columns_mapping.keys(),
-                                );
+                        if !columns_to_request.is_empty() {
+                            debug!(
+                                "requesting columns ({}): [{}] at start slot: {start_slot}",
+                                columns_to_request.len(),
+                                columns_to_request.iter().join(", "),
+                            );
 
-                                for (peer_id, columns) in peer_custody_columns_mapping {
-                                    // TODO(feature/fulu): catch error here
-                                    let columns = ContiguousList::try_from(columns.clone())
-                                        .map(Arc::new)
-                                        .expect("data columns should be able to parse");
+                            match self
+                                .sync_manager
+                                .map_peer_custody_columns(columns_to_request, Some(peer_id))
+                            {
+                                Ok(peer_custody_columns_mapping) => {
+                                    debug!(
+                                        "retrying batch {batch:?}, request_ids: {:?}, new peers: [{:?}]",
+                                        (request_id..request_id + peer_custody_columns_mapping.len()),
+                                        peer_custody_columns_mapping.keys(),
+                                    );
 
-                                    let batch = SyncBatch {
-                                        target: batch.target,
-                                        direction: batch.direction,
-                                        peer_id,
-                                        start_slot: batch.start_slot,
-                                        count: batch.count,
-                                        retry_count: batch.retry_count + 1,
-                                        response_received: batch.response_received,
-                                        data_columns: Some(columns.clone_arc()),
-                                    };
+                                    for (peer_id, columns) in peer_custody_columns_mapping {
+                                        // TODO(feature/fulu): catch error here
+                                        let columns = ContiguousList::try_from(columns.clone())
+                                            .map(Arc::new)
+                                            .expect("data columns should be able to parse");
 
-                                    SyncToP2p::RequestDataColumnsByRange(
-                                        request_id, peer_id, start_slot, count, columns,
-                                    )
-                                    .send(&self.sync_to_p2p_tx);
+                                        let batch = SyncBatch {
+                                            target: batch.target,
+                                            direction: batch.direction,
+                                            peer_id,
+                                            start_slot: batch.start_slot,
+                                            count: batch.count,
+                                            retry_count: batch.retry_count + 1,
+                                            response_received: batch.response_received,
+                                            data_columns: Some(columns.clone_arc()),
+                                        };
 
-                                    self.sync_manager
-                                        .retry_batch(request_id, batch, Some(peer_id));
+                                        SyncToP2p::RequestDataColumnsByRange(
+                                            request_id, peer_id, start_slot, count, columns,
+                                        )
+                                        .send(&self.sync_to_p2p_tx);
 
-                                    request_id = self.request_id()?;
+                                        self.sync_manager.retry_batch(
+                                            request_id,
+                                            batch,
+                                            Some(peer_id),
+                                        );
+
+                                        request_id = self.request_id()?;
+                                    }
                                 }
-                            }
-                            Err(error) => {
-                                warn!(
-                                    "could not find reliable peers to request data column sidecars, \
-                                     error: {error}",
-                                );
+                                Err(error) => {
+                                    warn!(
+                                        "could not find reliable peers to request data column sidecars, \
+                                         error: {error}",
+                                    );
 
-                                self.sync_manager.retry_batch(request_id, batch, None);
-                                self.sync_manager.refresh_custodial_peers();
+                                    self.sync_manager.retry_batch(request_id, batch, None);
+                                    self.sync_manager.refresh_custodial_peers();
+                                }
                             }
                         }
                     }
@@ -1001,10 +1028,13 @@ impl<P: Preset> BlockSyncService<P> {
             return Ok(());
         }
 
-        let columns_indices = identifiers.iter().map(|id| id.index).collect::<Vec<_>>();
+        let columns_indices = identifiers
+            .iter()
+            .map(|id| id.index)
+            .collect::<HashSet<_>>();
         match self
             .sync_manager
-            .map_peer_custody_columns(&columns_indices, None, None)
+            .map_peer_custody_columns(columns_indices, None)
         {
             Ok(peer_custody_columns_mapping) => {
                 for (peer_id, columns) in peer_custody_columns_mapping {
