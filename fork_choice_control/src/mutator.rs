@@ -69,9 +69,9 @@ use crate::{
         SyncMessage, ValidatorMessage,
     },
     misc::{
-        BlockBlobAvailability, Delayed, MutatorRejectionReason, PendingAggregateAndProof,
-        PendingAttestation, PendingBlobSidecar, PendingBlock, PendingChainLink,
-        PendingDataColumnSidecar, ReorgSource, VerifyAggregateAndProofResult,
+        BlockBlobAvailability, BlockDataColumnAvailability, Delayed, MutatorRejectionReason,
+        PendingAggregateAndProof, PendingAttestation, PendingBlobSidecar, PendingBlock,
+        PendingChainLink, PendingDataColumnSidecar, ReorgSource, VerifyAggregateAndProofResult,
         VerifyAttestationResult, WaitingForCheckpointState,
     },
     storage::Storage,
@@ -571,50 +571,86 @@ where
                 };
 
                 if pending_block.block.phase().is_peerdas_activated() {
-                    let missing_column_indices = self
-                        .store
-                        .indices_of_missing_data_columns(&pending_block.block);
-                    let available_columns_count = self
-                        .store
-                        .sampling_columns_count()
-                        .saturating_sub(missing_column_indices.len());
+                    let block_data_column_availability = self.block_data_column_availability(
+                        &pending_block.block,
+                        self.delayed_until_state
+                            .get(&(block_root, state.slot()))
+                            .iter()
+                            .flat_map(|delayed| delayed.data_column_sidecars.iter())
+                            .map(|pending| pending.data_column_sidecar.as_ref()),
+                    );
 
-                    if missing_column_indices.is_empty()
-                        || self.store.is_forward_synced()
-                            && available_columns_count > 0
-                            && available_columns_count * 2
-                                >= self.store.chain_config().number_of_columns()
-                    {
-                        self.retry_block(wait_group, pending_block);
-                    } else {
-                        debug!(
-                            "block delayed until sufficient data column sidecars are available \
-                             (missing columns: {missing_column_indices:?}, pending block root: {block_root:?})",
-                        );
-
-                        if let Some(gossip_id) = pending_block.origin.gossip_id() {
-                            self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                    match block_data_column_availability {
+                        BlockDataColumnAvailability::Complete => {
+                            self.retry_block(wait_group, pending_block);
                         }
+                        BlockDataColumnAvailability::AnyPending => {
+                            self.delay_block_until_blobs(block_root, pending_block);
 
-                        let pending_block = reply_delayed_block_validation_result(
-                            pending_block,
-                            Ok(ValidationOutcome::Ignore(false)),
-                        );
+                            self.take_delayed_until_state(block_root, state.slot())
+                                .unwrap_or_default()
+                                .data_column_sidecars
+                                .into_iter()
+                                .for_each(|pending_data_column| {
+                                    self.retry_data_column_sidecar(
+                                        wait_group.clone(),
+                                        pending_data_column,
+                                        Some(state.clone_arc()),
+                                    );
+                                });
+                        }
+                        BlockDataColumnAvailability::CompleteWithReconstruction => {
+                            if self
+                                .store
+                                .indices_of_missing_data_columns(&pending_block.block)
+                                .is_empty()
+                            {
+                                self.retry_block(wait_group, pending_block);
+                            } else {
+                                // TODO(peerdas-fulu): NEED REVIEW! if block proposed by itself, therefore all sampling
+                                // columns should be arrived soon or later, so no need to trigger reconstruction.
+                                if !matches!(pending_block.origin, BlockOrigin::Own) {
+                                    self.handle_reconstructing_data_column_sidecars(
+                                        pending_block.block.clone_arc(),
+                                    );
+                                }
 
-                        let data_column_ids = missing_column_indices
-                            .into_iter()
-                            .map(|index| DataColumnIdentifier { block_root, index })
-                            .collect_vec();
+                                self.delay_block_until_blobs(block_root, pending_block);
+                            }
+                        }
+                        BlockDataColumnAvailability::Missing(missing_column_indices) => {
+                            debug!(
+                                "block delayed until sufficient data column sidecars are available \
+                                 (missing columns: {missing_column_indices:?}, pending block root: {block_root:?})",
+                            );
 
-                        let peer_id = pending_block.origin.peer_id();
+                            if let Some(gossip_id) = pending_block.origin.gossip_id() {
+                                self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                            }
 
-                        self.request_blobs_from_execution_engine(
-                            pending_block.block.clone_arc(),
-                            data_column_ids.into(),
-                            peer_id,
-                        );
+                            let pending_block = reply_delayed_block_validation_result(
+                                pending_block,
+                                Ok(ValidationOutcome::Ignore(false)),
+                            );
 
-                        self.delay_block_until_blobs(block_root, pending_block);
+                            let data_column_ids = missing_column_indices
+                                .into_iter()
+                                .map(|index| DataColumnIdentifier { block_root, index })
+                                .collect_vec();
+
+                            let peer_id = pending_block.origin.peer_id();
+
+                            self.request_blobs_from_execution_engine(
+                                pending_block.block.clone_arc(),
+                                data_column_ids.into(),
+                                peer_id,
+                            );
+
+                            self.delay_block_until_blobs(block_root, pending_block);
+                        }
+                        BlockDataColumnAvailability::Irrelevant => {
+                            unreachable!("block without blobs should not be delayed until blobs")
+                        }
                     }
                 } else {
                     let block_blob_availability = self.block_blob_availability(
@@ -1363,6 +1399,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn handle_data_column_sidecar(
         &mut self,
         wait_group: W,
@@ -1380,21 +1417,15 @@ where
                     ));
                 }
 
-                let block_header = data_column_sidecar.signed_block_header.message;
-                if !self
-                    .store
-                    .accepted_data_column_sidecar(block_header, data_column_sidecar.index)
-                {
-                    let (gossip_id, sender) = origin.split();
+                let (gossip_id, sender) = origin.split();
 
-                    if let Some(gossip_id) = gossip_id {
-                        self.send_to_p2p(P2pMessage::Accept(gossip_id));
-                    }
-
-                    reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
-
-                    self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Accept(gossip_id));
                 }
+
+                reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
+
+                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
             }
             Ok(DataColumnSidecarAction::Ignore(publishable)) => {
                 let (gossip_id, sender) = origin.split();
@@ -1405,9 +1436,49 @@ where
 
                 reply_to_http_api(sender, Ok(ValidationOutcome::Ignore(publishable)));
             }
+            Ok(DataColumnSidecarAction::DelayUntilState(data_column_sidecar, block_root)) => {
+                let slot = data_column_sidecar.signed_block_header.message.slot;
+
+                let pending_data_column_sidecar = PendingDataColumnSidecar {
+                    data_column_sidecar,
+                    block_seen,
+                    origin,
+                    submission_time,
+                };
+
+                if let Some(state) =
+                    self.state_cache
+                        .existing_state_at_slot(&self.store, block_root, slot)
+                {
+                    self.retry_data_column_sidecar(
+                        wait_group,
+                        pending_data_column_sidecar,
+                        Some(state),
+                    );
+                } else {
+                    debug!(
+                        "data column sidecar delayed until state at same slot is ready \
+                         (identifier: {data_column_identifier:?}, slot: {slot})",
+                    );
+
+                    let peer_id = pending_data_column_sidecar.origin.peer_id();
+
+                    self.send_to_p2p(P2pMessage::BlockNeeded(block_root, peer_id));
+
+                    let pending_data_column_sidecar =
+                        reply_delayed_data_column_sidecar_validation_result(
+                            pending_data_column_sidecar,
+                            Ok(ValidationOutcome::Ignore(false)),
+                        );
+
+                    self.delay_data_column_sidecar_until_state(
+                        pending_data_column_sidecar,
+                        block_root,
+                    );
+                }
+            }
             Ok(DataColumnSidecarAction::DelayUntilParent(data_column_sidecar)) => {
                 let parent_root = data_column_sidecar.signed_block_header.message.parent_root;
-                let column_index = data_column_sidecar.index;
 
                 let pending_data_column_sidecar = PendingDataColumnSidecar {
                     data_column_sidecar,
@@ -1417,10 +1488,8 @@ where
                 };
 
                 if self.store.contains_block(parent_root) {
-                    self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar);
-                } else if !self
-                    .has_delay_data_column_sidecar_until_parent(parent_root, column_index)
-                {
+                    self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar, None);
+                } else {
                     debug!("data column sidecar delayed until block parent: {parent_root:?}");
 
                     let peer_id = pending_data_column_sidecar.origin.peer_id();
@@ -1434,15 +1503,10 @@ where
                         );
 
                     self.delay_data_column_sidecar_until_parent(pending_data_column_sidecar);
-                } else {
-                    debug!(
-                        "already delayed data column sidecar until block parent: {parent_root:?}",
-                    );
                 }
             }
             Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar)) => {
                 let slot = data_column_sidecar.signed_block_header.message.slot;
-                let column_index = data_column_sidecar.index;
 
                 let pending_data_column_sidecar = PendingDataColumnSidecar {
                     data_column_sidecar,
@@ -1452,8 +1516,8 @@ where
                 };
 
                 if slot <= self.store.slot() {
-                    self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar);
-                } else if !self.has_delay_data_column_sidecar_until_slot(slot, column_index) {
+                    self.retry_data_column_sidecar(wait_group, pending_data_column_sidecar, None);
+                } else {
                     debug!("data column sidecar delayed until slot: {slot}");
 
                     let pending_data_column_sidecar =
@@ -1463,8 +1527,6 @@ where
                         );
 
                     self.delay_data_column_sidecar_until_slot(pending_data_column_sidecar);
-                } else {
-                    debug!("already delayed data column sidecar until slot: {slot}");
                 }
             }
             Err(error) => {
@@ -1814,15 +1876,12 @@ where
     }
 
     fn handle_store_sampling_columns(&mut self, sampling_columns: HashSet<ColumnIndex>) {
-        let mut sorted_items = sampling_columns.into_iter().collect::<Vec<_>>();
-        sorted_items.sort_unstable();
-
-        info!(
-            "storing index of column sidecars to sample: [{}] for further data availability check",
-            sorted_items.iter().join(", "),
+        debug!(
+            "storing index of column sidecars to sample: {sampling_columns:?} \
+            for further data availability check",
         );
 
-        self.store_mut().store_sampling_columns(sorted_items.into());
+        self.store_mut().store_sampling_columns(sampling_columns);
     }
 
     #[expect(clippy::cognitive_complexity)]
@@ -1878,18 +1937,6 @@ where
         }
 
         debug!("block accepted (block_root: {block_root:?}, block: {block:?}, origin: {origin:?})");
-
-        // TODO(peerdas-fulu): NEED REVIEW! if block proposed by itself, therefore all sampling
-        // columns should be arrived soon or later, so no need to trigger reconstruction.
-        //
-        // Once block accepted while still having any missed columns, reconstruct!
-        if block.phase().is_peerdas_activated()
-            && self.store.is_forward_synced()
-            && !matches!(origin, BlockOrigin::Own)
-            && !self.store.indices_of_missing_data_columns(block).is_empty()
-        {
-            self.handle_reconstructing_data_column_sidecars(block.clone_arc());
-        }
 
         let block_slot = chain_link.slot();
 
@@ -2185,22 +2232,17 @@ where
 
         let slot = data_column_sidecar.slot();
         let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
-        let sampling_columns_count = self.store.sampling_columns_count();
-        let should_retry_while_syncing =
-            if sampling_columns_count * 2 >= self.store.chain_config().number_of_columns() {
-                accepted_data_columns * 2 >= sampling_columns_count
-            } else {
-                accepted_data_columns == sampling_columns_count
-            };
+        let should_retry_block_and_persist_columns = self.store.is_forward_synced()
+            || accepted_data_columns == self.store.sampling_columns_count();
 
         debug!(
-            "accepted data column sidecar (index: {}, slot: {slot}, count: {accepted_data_columns})",
+            "accepted data column sidecar (index: {}, slot: {slot}), count: {accepted_data_columns}",
             data_column_sidecar.index,
         );
 
         // During syncing, if we retry everytime when receiving a sidecar, this might spamming the
         // queue, leading to delaying other data column sidecar tasks
-        if self.store.is_forward_synced() || should_retry_while_syncing {
+        if should_retry_block_and_persist_columns {
             if let Some(pending_block) = self.take_delayed_until_blobs(block_root) {
                 self.retry_block(wait_group.clone(), pending_block);
             }
@@ -2209,8 +2251,7 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
-        if !self.storage.prune_storage_enabled() && accepted_data_columns == sampling_columns_count
-        {
+        if !self.storage.prune_storage_enabled() && should_retry_block_and_persist_columns {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
@@ -2552,19 +2593,22 @@ where
             .push(pending_blob_sidecar);
     }
 
-    fn has_delay_data_column_sidecar_until_parent(
-        &self,
-        parent_root: H256,
-        column_index: ColumnIndex,
-    ) -> bool {
-        self.delayed_until_block
-            .get(&parent_root)
-            .is_some_and(|entry| {
-                entry
-                    .data_column_sidecars
-                    .iter()
-                    .any(|pending| pending.data_column_sidecar.index == column_index)
-            })
+    fn delay_data_column_sidecar_until_state(
+        &mut self,
+        pending_data_column_sidecar: PendingDataColumnSidecar<P>,
+        block_root: H256,
+    ) {
+        let slot = pending_data_column_sidecar
+            .data_column_sidecar
+            .signed_block_header
+            .message
+            .slot;
+
+        self.delayed_until_state
+            .entry((block_root, slot))
+            .or_default()
+            .data_column_sidecars
+            .push(pending_data_column_sidecar);
     }
 
     fn delay_data_column_sidecar_until_parent(
@@ -2582,19 +2626,6 @@ where
             .or_default()
             .data_column_sidecars
             .push(pending_data_column_sidecar);
-    }
-
-    fn has_delay_data_column_sidecar_until_slot(
-        &self,
-        slot: Slot,
-        column_index: ColumnIndex,
-    ) -> bool {
-        self.delayed_until_slot.get(&slot).is_some_and(|entry| {
-            entry
-                .data_column_sidecars
-                .iter()
-                .any(|pending| pending.data_column_sidecar.index == column_index)
-        })
     }
 
     fn delay_data_column_sidecar_until_slot(
@@ -2665,7 +2696,7 @@ where
         }
 
         for pending_data_column_sidecar in data_column_sidecars {
-            self.retry_data_column_sidecar(wait_group.clone(), pending_data_column_sidecar);
+            self.retry_data_column_sidecar(wait_group.clone(), pending_data_column_sidecar, None);
         }
     }
 
@@ -2763,6 +2794,34 @@ where
         });
     }
 
+    fn retry_data_column_sidecar(
+        &self,
+        wait_group: W,
+        pending_data_column_sidecar: PendingDataColumnSidecar<P>,
+        state: Option<Arc<BeaconState<P>>>,
+    ) {
+        debug!("retrying delayed data column sidecar: {pending_data_column_sidecar:?}");
+
+        let PendingDataColumnSidecar {
+            data_column_sidecar,
+            block_seen,
+            origin,
+            submission_time,
+        } = pending_data_column_sidecar;
+
+        self.spawn(DataColumnSidecarTask {
+            store_snapshot: self.owned_store(),
+            mutator_tx: self.owned_mutator_tx(),
+            wait_group,
+            data_column_sidecar,
+            state,
+            block_seen,
+            origin,
+            submission_time,
+            metrics: self.metrics.clone(),
+        });
+    }
+
     fn prune_delayed_until_blobs(&mut self) -> Vec<GossipId> {
         let finalized_slot = self.store.finalized_slot();
 
@@ -2781,32 +2840,6 @@ where
         });
 
         gossip_ids
-    }
-
-    fn retry_data_column_sidecar(
-        &self,
-        wait_group: W,
-        pending_data_column_sidecar: PendingDataColumnSidecar<P>,
-    ) {
-        debug!("retrying delayed data column sidecar: {pending_data_column_sidecar:?}");
-
-        let PendingDataColumnSidecar {
-            data_column_sidecar,
-            block_seen,
-            origin,
-            submission_time,
-        } = pending_data_column_sidecar;
-
-        self.spawn(DataColumnSidecarTask {
-            store_snapshot: self.owned_store(),
-            mutator_tx: self.owned_mutator_tx(),
-            wait_group,
-            data_column_sidecar,
-            block_seen,
-            origin,
-            submission_time,
-            metrics: self.metrics.clone(),
-        });
     }
 
     // Some objects may be delayed until a block that is itself delayed.
@@ -3383,6 +3416,47 @@ where
         }
 
         BlockBlobAvailability::Missing(missing_blob_indices)
+    }
+
+    fn block_data_column_availability<'column>(
+        &self,
+        block: &SignedBeaconBlock<P>,
+        pending_data_columns_for_block: impl Iterator<Item = &'column DataColumnSidecar<P>>,
+    ) -> BlockDataColumnAvailability {
+        let Some(body) = block.message().body().post_deneb() else {
+            return BlockDataColumnAvailability::Irrelevant;
+        };
+
+        let missing_indices = self.store.indices_of_missing_data_columns(block);
+
+        if missing_indices.is_empty() {
+            return BlockDataColumnAvailability::Complete;
+        }
+
+        let pending_missing_data_columns = pending_data_columns_for_block
+            .filter(|data_column_sidecar| {
+                missing_indices.contains(&data_column_sidecar.index)
+                    && data_column_sidecar.kzg_commitments == *body.blob_kzg_commitments()
+            })
+            .collect_vec();
+
+        if !pending_missing_data_columns.is_empty() {
+            return BlockDataColumnAvailability::AnyPending;
+        }
+
+        let available_columns_count = self
+            .store
+            .sampling_columns_count()
+            .saturating_sub(missing_indices.len());
+
+        if self.store.is_forward_synced()
+            && available_columns_count > 0
+            && available_columns_count * 2 >= self.store.chain_config().number_of_columns()
+        {
+            return BlockDataColumnAvailability::CompleteWithReconstruction;
+        }
+
+        BlockDataColumnAvailability::Missing(missing_indices)
     }
 }
 

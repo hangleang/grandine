@@ -378,6 +378,7 @@ pub struct DataColumnSidecarTask<P: Preset, W> {
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
     pub wait_group: W,
     pub data_column_sidecar: Arc<DataColumnSidecar<P>>,
+    pub state: Option<Arc<CombinedBeaconState<P>>>,
     pub block_seen: bool,
     pub origin: DataColumnSidecarOrigin,
     pub submission_time: Instant,
@@ -391,6 +392,7 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
             mutator_tx,
             wait_group,
             data_column_sidecar,
+            state,
             block_seen,
             origin,
             submission_time,
@@ -417,8 +419,12 @@ impl<P: Preset, W> Run for DataColumnSidecarTask<P, W> {
         let index = data_column_sidecar.index;
         let data_column_identifier = DataColumnIdentifier { block_root, index };
 
-        let result =
-            store_snapshot.validate_data_column_sidecar(data_column_sidecar, block_seen, &origin);
+        let result = store_snapshot.validate_data_column_sidecar(
+            data_column_sidecar,
+            state,
+            block_seen,
+            &origin,
+        );
 
         if let Ok(DataColumnSidecarAction::Accept(_)) = result {
             if let Some(metrics) = metrics.as_ref() {

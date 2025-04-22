@@ -16,7 +16,10 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnSidecar},
+        primitives::ColumnIndex,
+    },
     phase0::primitives::ValidatorIndex,
     preset::Preset,
 };
@@ -178,4 +181,12 @@ pub enum ReorgSource {
     BlockAttestation,
     PayloadResponse,
     Tick,
+}
+
+pub enum BlockDataColumnAvailability {
+    Complete,
+    CompleteWithReconstruction,
+    AnyPending,
+    Missing(Vec<ColumnIndex>),
+    Irrelevant,
 }

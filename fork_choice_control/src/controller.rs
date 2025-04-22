@@ -199,8 +199,11 @@ where
         self.storage().config()
     }
 
-    pub fn on_store_sampling_columns(&self, sampling_columns: &[ColumnIndex]) {
-        self.spawn_store_sampling_columns(sampling_columns)
+    pub fn on_store_sampling_columns(&self, sampling_columns: HashSet<ColumnIndex>) {
+        if !self.owned_store_snapshot().has_sampling_columns_stored() {
+            MutatorMessage::StoreSamplingColumns { sampling_columns }
+                .send(&self.owned_mutator_tx());
+        }
     }
 
     // This should be called at the start of every tick.
@@ -550,6 +553,7 @@ where
             mutator_tx: self.owned_mutator_tx(),
             wait_group: self.owned_wait_group(),
             data_column_sidecar,
+            state: None,
             block_seen,
             origin: DataColumnSidecarOrigin::Requested(peer_id),
             submission_time: Instant::now(),
@@ -671,6 +675,7 @@ where
             mutator_tx: self.owned_mutator_tx(),
             wait_group,
             data_column_sidecar,
+            state: None,
             block_seen,
             origin,
             submission_time: Instant::now(),
@@ -701,15 +706,6 @@ where
         })
     }
 
-    fn spawn_store_sampling_columns(&self, sampling_columns: &[ColumnIndex]) {
-        if !self.owned_store_snapshot().has_sampling_columns_stored() {
-            MutatorMessage::StoreSamplingColumns {
-                sampling_columns: sampling_columns.iter().copied().collect::<HashSet<_>>(),
-            }
-            .send(&self.owned_mutator_tx());
-        }
-    }
-
     pub(crate) fn spawn(&self, task: impl Spawn<P, E, W>) {
         self.thread_pool.spawn(task);
     }
@@ -731,8 +727,8 @@ where
         self.store_snapshot().store_config()
     }
 
-    pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
-        self.store_snapshot().sampling_columns()
+    pub fn sampling_columns(&self) -> HashSet<ColumnIndex> {
+        self.store_snapshot().sampling_columns().clone()
     }
 
     pub fn accepted_data_column_sidecar(

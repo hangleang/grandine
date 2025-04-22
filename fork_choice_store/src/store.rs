@@ -229,7 +229,7 @@ pub struct Store<P: Preset, S: Storage<P>> {
     finished_initial_forward_sync: bool,
     finished_back_sync: bool,
     blacklisted_blocks: StdHashSet<H256>,
-    sampling_columns: HashSet<ColumnIndex>,
+    sampling_columns: StdHashSet<ColumnIndex>,
     sidecars_construction_started: Arc<DashMap<H256, Slot>>,
 }
 
@@ -315,7 +315,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             finished_initial_forward_sync,
             finished_back_sync,
             blacklisted_blocks,
-            sampling_columns: HashSet::default(),
+            sampling_columns: StdHashSet::default(),
             sidecars_construction_started,
         }
     }
@@ -1165,14 +1165,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             && data_availability_policy.check()
         {
             if state.phase().is_peerdas_activated() {
-                // While syncing, require all custody columns plus extra sampling to be available,
-                // Otherwise, accept block if more than half of columns are available, the rest can
-                // be reconstruct later using `recover_matrix` method.
-                if !self.indices_of_missing_data_columns(block).is_empty()
-                    && (!self.is_forward_synced()
-                        || self.available_columns_at_block(block_root).len() * 2
-                            < self.chain_config.number_of_columns())
-                {
+                if !self.indices_of_missing_data_columns(block).is_empty() {
                     return Ok(BlockAction::DelayUntilBlobs(block.clone_arc(), state));
                 }
             } else if !self.indices_of_missing_blobs(block).is_empty() {
@@ -2071,7 +2064,10 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             // Delay data column validations until the state is available.
             // Alternatively, we could allow slot processing to obtain states for data column sidecar validations,
             // however, that introduces oportunity for DoS attacks with fake data column sidecars.
-            return Ok(DataColumnSidecarAction::DelayUntilSlot(data_column_sidecar));
+            return Ok(DataColumnSidecarAction::DelayUntilState(
+                data_column_sidecar,
+                block_root,
+            ));
         };
 
         // [REJECT] The proposer signature of sidecar.signed_block_header, is valid with respect to the block_header.proposer_index pubkey.
@@ -2184,27 +2180,40 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     pub fn validate_data_column_sidecar(
         &self,
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        state: Option<Arc<BeaconState<P>>>,
         block_seen: bool,
         origin: &DataColumnSidecarOrigin,
     ) -> Result<DataColumnSidecarAction<P>> {
         let block_header = data_column_sidecar.signed_block_header.message;
 
-        self.validate_data_column_sidecar_with_state(
-            data_column_sidecar,
-            block_seen,
-            origin,
-            || {
-                self.chain_link(block_header.parent_root)
-                    .map(|chain_link| (chain_link.block.clone_arc(), chain_link.payload_status))
-            },
-            || {
-                self.state_cache.existing_state_at_slot(
-                    self,
-                    block_header.parent_root,
-                    block_header.slot,
-                )
-            },
-        )
+        let parent_info = || {
+            self.chain_link(block_header.parent_root)
+                .map(|chain_link| (chain_link.block.clone_arc(), chain_link.payload_status))
+        };
+
+        if let Some(state) = state {
+            self.validate_data_column_sidecar_with_state(
+                data_column_sidecar,
+                block_seen,
+                origin,
+                parent_info,
+                || Some(state),
+            )
+        } else {
+            self.validate_data_column_sidecar_with_state(
+                data_column_sidecar,
+                block_seen,
+                origin,
+                parent_info,
+                || {
+                    self.state_cache.existing_state_at_slot(
+                        self,
+                        block_header.parent_root,
+                        block_header.slot,
+                    )
+                },
+            )
+        }
     }
 
     /// [`on_tick`](https://github.com/ethereum/consensus-specs/blob/v1.3.0/specs/phase0/fork-choice.md#on_tick)
@@ -3605,7 +3614,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
 
     pub fn indices_of_missing_data_columns(
         &self,
-        block: &Arc<SignedBeaconBlock<P>>,
+        block: &SignedBeaconBlock<P>,
     ) -> Vec<ColumnIndex> {
         let block = block.message();
 
@@ -3621,16 +3630,16 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
 
         // TODO(peerdas-fulu): figure out the way to check sampling columns without storing the indices in sync_manager
         self.sampling_columns
-            .clone()
-            .into_iter()
+            .iter()
             .filter(|index| {
                 !self
                     .accepted_data_column_sidecars
-                    .get(&(block.slot(), block.proposer_index(), *index))
+                    .get(&(block.slot(), block.proposer_index(), **index))
                     .is_some_and(|kzg_commitments| {
                         kzg_commitments.get(&block_root) == Some(body.blob_kzg_commitments())
                     })
             })
+            .copied()
             .collect()
     }
 
@@ -3705,7 +3714,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         self.data_column_cache.unpersisted_data_column_sidecars()
     }
 
-    pub fn store_sampling_columns(&mut self, sampling_columns: HashSet<ColumnIndex>) {
+    pub fn store_sampling_columns(&mut self, sampling_columns: StdHashSet<ColumnIndex>) {
         self.sampling_columns = sampling_columns;
     }
 
@@ -3717,8 +3726,8 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         self.sampling_columns.len()
     }
 
-    pub fn sampling_columns(&self) -> impl IntoIterator<Item = ColumnIndex> {
-        self.sampling_columns.clone().into_iter()
+    pub const fn sampling_columns(&self) -> &StdHashSet<ColumnIndex> {
+        &self.sampling_columns
     }
 
     pub fn available_columns_at_block(&self, block_root: H256) -> Vec<Arc<DataColumnSidecar<P>>> {
