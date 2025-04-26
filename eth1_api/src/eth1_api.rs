@@ -216,7 +216,7 @@ impl Eth1Api {
     pub(crate) async fn get_blobs_v2<P: Preset>(
         &self,
         versioned_hashes: Vec<VersionedHash>,
-    ) -> Result<Vec<Option<BlobAndProofV2<P>>>> {
+    ) -> Result<Option<Vec<BlobAndProofV2<P>>>> {
         let params = vec![serde_json::to_value(versioned_hashes)?];
 
         self.execute(
@@ -496,7 +496,7 @@ impl Eth1Api {
     /// [`engine_getPayloadV2`]: https://github.com/ethereum/execution-apis/blob/b7c5d3420e00648f456744d121ffbd929862924d/src/engine/shanghai.md#engine_getpayloadv2
     /// [`engine_getPayloadV3`]: https://github.com/ethereum/execution-apis/blob/a0d03086564ab1838b462befbc083f873dcf0c0f/src/engine/cancun.md#engine_getpayloadv3
     /// [`engine_getPayloadV4`]: https://github.com/ethereum/execution-apis/blob/4140e528360fea53c34a766d86a000c6c039100e/src/engine/prague.md#engine_getpayloadv4
-    /// [`engine_getPayloadV5`]: TBD
+    /// [`engine_getPayloadV5`]: https://github.com/ethereum/execution-apis/blob/5d634063ccfd897a6974ea589c00e2c1d889abc9/src/engine/osaka.md#engine_getpayloadv5
     pub async fn get_payload<P: Preset>(
         &self,
         payload_id: PayloadId,

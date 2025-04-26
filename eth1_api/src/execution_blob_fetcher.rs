@@ -212,108 +212,116 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 && !self.controller.store_config().disable_engine_getblobs
                 && !self.sidecars_construction_started.contains_key(&block_root)
             {
+                let expected_blobs_count = body.blob_kzg_commitments().len();
                 let versioned_hashes = body
                     .blob_kzg_commitments()
                     .iter()
                     .copied()
                     .map(misc::kzg_commitment_to_versioned_hash)
                     .collect::<Vec<_>>();
-                let expected_blob_count = versioned_hashes.len();
                 let mut data_column_sidecars = vec![];
 
                 match self.api.get_blobs_v2::<P>(versioned_hashes).await {
-                    Ok(blobs_and_proofs) => {
-                        let (received_blobs, cells_proofs): (Vec<_>, Vec<_>) = blobs_and_proofs
-                            .into_iter()
-                            .filter_map(|blob_and_proof| {
-                                blob_and_proof.map(|BlobAndProofV2 { blob, proofs }| (blob, proofs))
-                            })
-                            .unzip();
+                    Ok(blobs_and_proofs_opt) => {
+                        if let Some(blobs_and_proofs) = blobs_and_proofs_opt {
+                            if blobs_and_proofs.len() == expected_blobs_count {
+                                let (received_blobs, cells_proofs): (Vec<_>, Vec<_>) =
+                                    blobs_and_proofs
+                                        .into_iter()
+                                        .map(|BlobAndProofV2 { blob, proofs }| (blob, proofs))
+                                        .unzip();
 
-                        if received_blobs.len() == expected_blob_count {
-                            debug!(
-                                "received all {expected_blob_count} blob sidecars from EL at slot: {slot}",
-                            );
+                                debug!(
+                                    "received all {expected_blobs_count} blob sidecars from EL at slot: {slot}",
+                                );
 
-                            match cells_proofs
-                                .into_iter()
-                                .map(|proofs| {
-                                    ContiguousVector::try_from_iter(proofs.into_iter())
-                                        .map_err(Into::into)
-                                })
-                                .collect::<Result<Vec<_>>>()
-                            {
-                                Ok(ext_proofs) => {
-                                    match eip_7594::try_compute_ext_cells::<P>(
-                                        &received_blobs,
-                                        self.controller.store_config().kzg_backend,
-                                    ) {
-                                        Ok(ext_cells) => {
-                                            let cells_and_kzg_proofs = ext_cells
-                                                .into_iter()
-                                                .zip(ext_proofs)
-                                                .collect::<Vec<_>>();
+                                match cells_proofs
+                                    .into_iter()
+                                    .map(|proofs| {
+                                        ContiguousVector::try_from_iter(proofs.into_iter())
+                                            .map_err(Into::into)
+                                    })
+                                    .collect::<Result<Vec<_>>>()
+                                {
+                                    Ok(ext_proofs) => {
+                                        match eip_7594::try_compute_ext_cells::<P>(
+                                            &received_blobs,
+                                            self.controller.store_config().kzg_backend,
+                                        ) {
+                                            Ok(ext_cells) => {
+                                                let cells_and_kzg_proofs = ext_cells
+                                                    .into_iter()
+                                                    .zip(ext_proofs)
+                                                    .collect::<Vec<_>>();
 
-                                            match eip_7594::construct_data_column_sidecars(
-                                                &block,
-                                                &cells_and_kzg_proofs,
-                                                self.controller.chain_config(),
-                                            ) {
-                                                Ok(data_columns) => {
-                                                    self.sidecars_construction_started
-                                                        .insert(block_root, slot);
+                                                match eip_7594::construct_data_column_sidecars(
+                                                    &block,
+                                                    &cells_and_kzg_proofs,
+                                                    self.controller.chain_config(),
+                                                ) {
+                                                    Ok(data_columns) => {
+                                                        self.sidecars_construction_started
+                                                            .insert(block_root, slot);
 
-                                                    let sampling_columns = self
-                                                        .controller
-                                                        .sampling_columns()
-                                                        .into_iter()
-                                                        .collect::<Vec<_>>();
+                                                        let sampling_columns = self
+                                                            .controller
+                                                            .sampling_columns()
+                                                            .into_iter()
+                                                            .collect::<Vec<_>>();
 
-                                                    for data_column_sidecar in
-                                                        data_columns.into_iter().filter(|column| {
-                                                            sampling_columns.contains(&column.index)
-                                                        })
-                                                    {
-                                                        let data_column_identifier =
-                                                            DataColumnIdentifier {
-                                                                block_root,
-                                                                index: data_column_sidecar.index,
-                                                            };
-
-                                                        if self
-                                                            .received_data_column_sidecars
-                                                            .insert(data_column_identifier, slot)
-                                                            .is_none()
+                                                        for data_column_sidecar in data_columns
+                                                            .into_iter()
+                                                            .filter(|column| {
+                                                                sampling_columns
+                                                                    .contains(&column.index)
+                                                            })
                                                         {
-                                                            data_column_sidecars.push(Arc::new(
-                                                                data_column_sidecar,
-                                                            ));
+                                                            let data_column_identifier =
+                                                                DataColumnIdentifier {
+                                                                    block_root,
+                                                                    index: data_column_sidecar
+                                                                        .index,
+                                                                };
+
+                                                            if self
+                                                                .received_data_column_sidecars
+                                                                .insert(
+                                                                    data_column_identifier,
+                                                                    slot,
+                                                                )
+                                                                .is_none()
+                                                            {
+                                                                data_column_sidecars.push(
+                                                                    Arc::new(data_column_sidecar),
+                                                                );
+                                                            }
                                                         }
                                                     }
-                                                }
-                                                Err(error) => warn!(
+                                                    Err(error) => warn!(
                                                     "failed to construct data column sidecars with \
                                                     cells and kzg proofs: {error:?}"
                                                 ),
+                                                }
                                             }
-                                        }
-                                        Err(error) => warn!(
-                                            "failed to convert blobs received from EL \
+                                            Err(error) => warn!(
+                                                "failed to convert blobs received from EL \
                                             into extended cells: {error:?}"
-                                        ),
+                                            ),
+                                        }
                                     }
-                                }
-                                Err(error) => warn!(
+                                    Err(error) => warn!(
                                     "received cells proofs from EL with incorrect length: {error:?}"
                                 ),
+                                }
+                            } else {
+                                warn!(
+                                    "EL must response all blobs or null (expected: {}, got: {})",
+                                    expected_blobs_count,
+                                    blobs_and_proofs.len(),
+                                );
                             }
                         } else {
-                            debug!(
-                                "received blobs less than expected from EL at slot: {slot} \
-                                 (expected: {}, got: {})",
-                                expected_blob_count,
-                                received_blobs.len(),
-                            );
+                            debug!("EL doesn't has all blobs to response back",);
                         }
                     }
                     Err(error) => warn!("engine_getBlobsV2 call failed: {error}"),

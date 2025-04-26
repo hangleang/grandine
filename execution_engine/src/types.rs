@@ -414,7 +414,7 @@ impl<P: Preset> From<ExecutionPayloadV3<P>> for DenebExecutionPayload<P> {
 // Merge `BlobsBundleV1` with `BlobsBundleV2` by using the same `proofs` max length
 //
 /// [`BlobsBundleV1`](https://github.com/ethereum/execution-apis/blob/v1.0.0-beta.3/src/engine/experimental/blob-extension.md#blobsbundlev1)
-/// [`BlobsBundleV2`](TBD)
+/// [`BlobsBundleV2`](https://github.com/ethereum/execution-apis/blob/5d634063ccfd897a6974ea589c00e2c1d889abc9/src/engine/osaka.md#blobsbundlev2)
 #[derive(Deserialize, Serialize)]
 #[serde(bound = "", rename_all = "camelCase")]
 pub struct BlobsBundle<P: Preset> {
