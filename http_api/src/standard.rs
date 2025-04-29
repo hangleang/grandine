@@ -67,7 +67,7 @@ use types::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
-    fulu::containers::DataColumnSidecar,
+    fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
     nonstandard::{
         BlockRewards, Phase, RelativeEpoch, ValidationOutcome, WithBlobsAndMev, WithStatus,
         WEI_IN_GWEI,
@@ -1133,12 +1133,42 @@ pub async fn blob_sidecars<P: Preset, W: Wait>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let blob_sidecars = controller.blob_sidecars_by_ids(blob_identifiers)?;
-    let blob_sidecars = DynamicList::try_from_iter_with_maximum(
-        blob_sidecars.into_iter(),
-        usize::try_from(max_blobs_per_block).map_err(AnyhowError::new)?,
-    )
-    .map_err(AnyhowError::new)?;
+    let blob_sidecars = if version.is_peerdas_activated() {
+        let half_columns = controller
+            .chain_config()
+            .number_of_columns
+            .saturating_div(2);
+        let column_identifiers = (0..half_columns)
+            .map(|index| DataColumnIdentifier { block_root, index })
+            .collect::<Vec<_>>();
+        let data_column_sidecars = controller.data_column_sidecars_by_ids(column_identifiers)?;
+
+        // TODO(peerdas-fulu): with validator custody, node should reconstruct with any 64 columns,
+        // then construct requested blobs, serve to the request
+        if data_column_sidecars.len() == half_columns as usize {
+            let blob_sidecars = misc::construct_blob_sidecars_from_data_column_sidecars(
+                &block,
+                data_column_sidecars.into_iter(),
+            )?;
+
+            DynamicList::try_from_iter_with_maximum(
+                blob_sidecars.into_iter().filter(|blob_sidecar| {
+                    blob_identifiers.contains(&blob_sidecar.as_ref().into())
+                }),
+                usize::try_from(max_blobs_per_block).map_err(AnyhowError::new)?,
+            )
+            .map_err(AnyhowError::new)?
+        } else {
+            DynamicList::empty()
+        }
+    } else {
+        let blob_sidecars = controller.blob_sidecars_by_ids(blob_identifiers)?;
+        DynamicList::try_from_iter_with_maximum(
+            blob_sidecars.into_iter(),
+            usize::try_from(max_blobs_per_block).map_err(AnyhowError::new)?,
+        )
+        .map_err(AnyhowError::new)?
+    };
 
     Ok(EthResponse::json_or_ssz(blob_sidecars, &headers)?
         .execution_optimistic(status.is_optimistic())
