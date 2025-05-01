@@ -704,10 +704,11 @@ impl<P: Preset> BlockSyncService<P> {
                                 columns_to_request.iter().join(", "),
                             );
 
-                            match self
-                                .sync_manager
-                                .map_peer_custody_columns(columns_to_request, Some(peer_id))
-                            {
+                            match self.sync_manager.map_peer_custody_columns(
+                                columns_to_request,
+                                start_slot.saturating_add(count),
+                                Some(peer_id),
+                            ) {
                                 Ok(peer_custody_columns_mapping) => {
                                     debug!(
                                         "retrying batch {batch:?}, request_ids: {:?}, new peers: [{:?}]",
@@ -746,10 +747,9 @@ impl<P: Preset> BlockSyncService<P> {
                                         request_id = self.request_id()?;
                                     }
                                 }
-                                Err(error) => {
+                                Err(_) => {
                                     warn!(
-                                        "could not find reliable peers to request data column sidecars, \
-                                         error: {error}",
+                                        "could not find available peers to request data column sidecars",
                                     );
 
                                     self.sync_manager.retry_batch(request_id, batch, None);
@@ -1034,7 +1034,7 @@ impl<P: Preset> BlockSyncService<P> {
             .collect::<HashSet<_>>();
         match self
             .sync_manager
-            .map_peer_custody_columns(columns_indices, None)
+            .map_peer_custody_columns(columns_indices, slot, None)
         {
             Ok(peer_custody_columns_mapping) => {
                 for (peer_id, columns) in peer_custody_columns_mapping {
@@ -1058,8 +1058,8 @@ impl<P: Preset> BlockSyncService<P> {
                     }
                 }
             }
-            Err(error) => {
-                warn!("could not find reliable peers to request column sidecars, error: {error}");
+            Err(_) => {
+                warn!("could not find available peers to request column sidecars");
 
                 self.sync_manager.refresh_custodial_peers();
             }

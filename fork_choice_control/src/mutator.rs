@@ -1411,7 +1411,7 @@ where
     ) {
         match result {
             Ok(DataColumnSidecarAction::Accept(data_column_sidecar)) => {
-                if origin.is_from_el_or_reconstruction() {
+                if self.store.is_forward_synced() && origin.is_from_el_or_reconstruction() {
                     self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(
                         data_column_sidecar.clone_arc(),
                     ));
@@ -1646,29 +1646,21 @@ where
     fn handle_reconstructing_data_column_sidecars(&mut self, block: Arc<SignedBeaconBlock<P>>) {
         let block_root = block.message().hash_tree_root();
 
-        if !self.store.is_sidecars_construction_started(block_root) {
-            let missing_indices = self.store.indices_of_missing_data_columns(&block);
-            let available_columns_count = self
+        if !self.store.is_sidecars_construction_started(block_root)
+            && !self
                 .store
-                .sampling_columns_count()
-                .saturating_sub(missing_indices.len());
+                .indices_of_missing_data_columns(&block)
+                .is_empty()
+        {
+            self.store_mut()
+                .mark_started_sidecars_construction(block_root, block.message().slot());
+            self.update_store_snapshot();
 
-            if !missing_indices.is_empty()
-                && available_columns_count > 0
-                && available_columns_count * 2 >= self.store.chain_config().number_of_columns()
-            {
-                let slot = block.message().slot();
-
-                self.store_mut()
-                    .mark_started_sidecars_construction(block_root, slot);
-                self.update_store_snapshot();
-
-                self.spawn(ReconstructDataColumnSidecarsTask {
-                    store_snapshot: self.owned_store(),
-                    mutator_tx: self.owned_mutator_tx(),
-                    block,
-                });
-            }
+            self.spawn(ReconstructDataColumnSidecarsTask {
+                store_snapshot: self.owned_store(),
+                mutator_tx: self.owned_mutator_tx(),
+                block,
+            });
         }
     }
 
@@ -2232,17 +2224,16 @@ where
 
         let slot = data_column_sidecar.slot();
         let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
-        let should_retry_block_and_persist_columns = self.store.is_forward_synced()
-            || accepted_data_columns == self.store.sampling_columns_count();
-
-        debug!(
+        let should_retry_block = self.store.is_forward_synced()
+            || accepted_data_columns * 3 >= self.store.sampling_columns_count() * 2;
+        info!(
             "accepted data column sidecar (index: {}, slot: {slot}), count: {accepted_data_columns}",
             data_column_sidecar.index,
         );
 
         // During syncing, if we retry everytime when receiving a sidecar, this might spamming the
         // queue, leading to delaying other data column sidecar tasks
-        if should_retry_block_and_persist_columns {
+        if should_retry_block {
             if let Some(pending_block) = self.take_delayed_until_blobs(block_root) {
                 self.retry_block(wait_group.clone(), pending_block);
             }
@@ -2251,7 +2242,9 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
-        if !self.storage.prune_storage_enabled() && should_retry_block_and_persist_columns {
+        if !self.storage.prune_storage_enabled()
+            && accepted_data_columns == self.store.sampling_columns_count()
+        {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
@@ -3433,14 +3426,15 @@ where
             return BlockDataColumnAvailability::Complete;
         }
 
-        let pending_missing_data_columns = pending_data_columns_for_block
-            .filter(|data_column_sidecar| {
-                missing_indices.contains(&data_column_sidecar.index)
-                    && data_column_sidecar.kzg_commitments == *body.blob_kzg_commitments()
+        let pending_columns_indices = pending_data_columns_for_block
+            .filter_map(|data_column_sidecar| {
+                (missing_indices.contains(&data_column_sidecar.index)
+                    && data_column_sidecar.kzg_commitments == *body.blob_kzg_commitments())
+                .then_some(data_column_sidecar.index)
             })
             .collect_vec();
 
-        if !pending_missing_data_columns.is_empty() {
+        if !pending_columns_indices.is_empty() {
             return BlockDataColumnAvailability::AnyPending;
         }
 

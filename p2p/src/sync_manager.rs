@@ -351,7 +351,11 @@ impl SyncManager {
                                     ),
                                 );
 
-                                match self.map_peer_custody_columns(columns_to_request, None) {
+                                match self.map_peer_custody_columns(
+                                    columns_to_request,
+                                    start_slot.saturating_add(count),
+                                    None,
+                                ) {
                                     Ok(peer_custody_columns_mapping) => {
                                         for (peer_id, columns) in peer_custody_columns_mapping {
                                             let batch = SyncBatch {
@@ -375,12 +379,11 @@ impl SyncManager {
                                             sync_batches.push(batch);
                                         }
                                     }
-                                    Err(error) => {
+                                    Err(_) => {
                                         self.log(
                                             Level::Debug,
                                             format!(
-                                                "could not find reliable peers to request data column sidecars, \
-                                                 error: {error}",
+                                                "could not find available peers to request data column sidecars",
                                             ),
                                         );
 
@@ -615,7 +618,7 @@ impl SyncManager {
                             ),
                         );
 
-                        match self.map_peer_custody_columns(columns_to_request, None) {
+                        match self.map_peer_custody_columns(columns_to_request, max_slot, None) {
                             Ok(peer_custody_columns_mapping) => {
                                 for (peer_id, columns) in peer_custody_columns_mapping {
                                     sync_batches.push(SyncBatch {
@@ -637,8 +640,7 @@ impl SyncManager {
                                 self.log(
                                     Level::Debug,
                                     format!(
-                                        "could not find reliable peers to request data column sidecars, \
-                                        start slot: {start_slot}",
+                                        "could not find available peers to request data column sidecars",
                                     ),
                                 );
 
@@ -1055,6 +1057,7 @@ impl SyncManager {
     fn get_random_custodial_peer(
         &self,
         column_index: ColumnIndex,
+        min_head_slot: Slot,
         skip_peer: Option<PeerId>,
     ) -> Option<PeerId> {
         let mut custodial_peers = if let Some(peers) = self.custodial_peers.get(&column_index) {
@@ -1063,9 +1066,27 @@ impl SyncManager {
             self.network_globals.custody_peers_for_column(column_index)
         };
 
+        // Skip peer who failed to serve us in previous request
         if let Some(bad_peer) = skip_peer {
             custodial_peers.retain(|peer| *peer != bad_peer);
         }
+
+        // Filter out busy peers, and include only peers which its head slot greater than request max slot
+        let busy_peers = self
+            .data_column_requests
+            .busy_peers()
+            .collect::<HashSet<PeerId>>();
+        let custodial_peers = custodial_peers
+            .iter()
+            .filter(|peer| {
+                !busy_peers.contains(peer)
+                    && self
+                        .peers
+                        .get(peer)
+                        .is_some_and(|status| status.head_slot >= min_head_slot)
+            })
+            .copied()
+            .collect_vec();
 
         custodial_peers.choose(&mut thread_rng()).copied()
     }
@@ -1073,14 +1094,16 @@ impl SyncManager {
     pub fn map_peer_custody_columns(
         &self,
         column_indices: HashSet<ColumnIndex>,
+        min_head_slot: Slot,
         skip_peer: Option<PeerId>,
     ) -> Result<HashMap<PeerId, Vec<ColumnIndex>>> {
         let mut peer_columns_mapping = HashMap::new();
 
         for column_index in column_indices {
-            let Some(custodial_peer) = self.get_random_custodial_peer(column_index, skip_peer)
+            let Some(custodial_peer) =
+                self.get_random_custodial_peer(column_index, min_head_slot, skip_peer)
             else {
-                return Err(MapPeerCustodyError::NoCustodyPeers { column_index }.into());
+                continue;
             };
 
             let peer_custody_columns = peer_columns_mapping
@@ -1090,7 +1113,9 @@ impl SyncManager {
             peer_custody_columns.push(column_index);
         }
 
-        Ok(peer_columns_mapping)
+        (!peer_columns_mapping.is_empty())
+            .then_some(peer_columns_mapping)
+            .ok_or(MapPeerCustodyError::NoAvailablePeers.into())
     }
 
     pub fn expired_blob_range_batches(
@@ -1142,8 +1167,8 @@ impl SyncManager {
 
 #[derive(Debug, Error)]
 enum MapPeerCustodyError {
-    #[error("No custodial peer for column_index: {column_index}")]
-    NoCustodyPeers { column_index: ColumnIndex },
+    #[error("No available peers")]
+    NoAvailablePeers,
 }
 
 #[cfg(test)]
