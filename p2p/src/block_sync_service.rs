@@ -707,6 +707,7 @@ impl<P: Preset> BlockSyncService<P> {
                             match self.sync_manager.map_peer_custody_columns(
                                 columns_to_request,
                                 start_slot.saturating_add(count),
+                                false,
                                 Some(peer_id),
                             ) {
                                 Ok(peer_custody_columns_mapping) => {
@@ -1034,7 +1035,7 @@ impl<P: Preset> BlockSyncService<P> {
             .collect::<HashSet<_>>();
         match self
             .sync_manager
-            .map_peer_custody_columns(columns_indices, slot, None)
+            .map_peer_custody_columns(columns_indices, slot, false, None)
         {
             Ok(peer_custody_columns_mapping) => {
                 for (peer_id, columns) in peer_custody_columns_mapping {
