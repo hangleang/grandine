@@ -14,7 +14,10 @@ use crate::{
         consts::{CurrentSyncCommitteeIndex, FinalizedRootIndex, NextSyncCommitteeIndex},
         containers::{Attestation, AttesterSlashing, ExecutionRequests},
     },
-    fulu::primitives::{BlobCommitmentsInclusionProof, Cell, ColumnIndex, RowIndex},
+    fulu::{
+        consts::NumberOfColumns,
+        primitives::{BlobCommitmentsInclusionProof, Cell, ColumnIndex, RowIndex},
+    },
     phase0::{
         containers::{
             BeaconBlockHeader, Deposit, Eth1Data, ProposerSlashing, SignedBeaconBlockHeader,
@@ -156,6 +159,13 @@ pub struct DataColumnIdentifier {
     pub block_root: H256,
     #[serde(with = "serde_utils::string_or_native")]
     pub index: ColumnIndex,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Deserialize, Serialize, Ssz)]
+#[serde(bound = "", deny_unknown_fields)]
+pub struct DataColumnsByRootIdentifier {
+    pub block_root: H256,
+    pub columns: ContiguousList<ColumnIndex, NumberOfColumns>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize, Ssz)]

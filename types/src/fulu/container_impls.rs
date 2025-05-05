@@ -10,7 +10,7 @@ use crate::{
     electra::containers::ExecutionRequests,
     fulu::containers::{
         BeaconBlock, BeaconBlockBody, BlindedBeaconBlock, BlindedBeaconBlockBody,
-        DataColumnIdentifier, DataColumnSidecar,
+        DataColumnIdentifier, DataColumnSidecar, DataColumnsByRootIdentifier,
     },
     phase0::primitives::H256,
     preset::Preset,
@@ -173,5 +173,19 @@ impl<P: Preset> From<&DataColumnSidecar<P>> for DataColumnIdentifier {
         let block_root = block_header.hash_tree_root();
 
         Self { block_root, index }
+    }
+}
+
+impl From<DataColumnsByRootIdentifier> for Vec<DataColumnIdentifier> {
+    fn from(data_columns_by_root: DataColumnsByRootIdentifier) -> Self {
+        let DataColumnsByRootIdentifier {
+            block_root,
+            columns,
+        } = data_columns_by_root;
+
+        columns
+            .into_iter()
+            .map(|index| DataColumnIdentifier { block_root, index })
+            .collect()
     }
 }

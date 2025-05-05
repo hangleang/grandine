@@ -6,8 +6,11 @@ use futures::channel::mpsc::UnboundedSender;
 use log::debug;
 use serde::Serialize;
 use types::{
-    combined::SignedBeaconBlock, deneb::containers::BlobIdentifier,
-    fulu::containers::DataColumnIdentifier, phase0::primitives::Slot, preset::Preset,
+    combined::SignedBeaconBlock,
+    deneb::containers::BlobIdentifier,
+    fulu::containers::DataColumnsByRootIdentifier,
+    phase0::primitives::Slot,
+    preset::Preset,
 };
 
 pub struct Eth1Metrics {
@@ -53,7 +56,7 @@ impl<P: Preset> Eth1ApiToBlobFetcher<P> {
 #[derive(Serialize)]
 pub enum BlobFetcherToP2p {
     BlobsNeeded(Vec<BlobIdentifier>, Slot, Option<PeerId>),
-    DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot),
+    DataColumnsNeeded(DataColumnsByRootIdentifier, Slot),
 }
 
 impl BlobFetcherToP2p {

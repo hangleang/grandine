@@ -33,7 +33,7 @@ use tokio_stream::wrappers::IntervalStream;
 use types::{
     config::Config,
     deneb::containers::BlobIdentifier,
-    fulu::containers::DataColumnIdentifier,
+    fulu::containers::{DataColumnIdentifier, DataColumnsByRootIdentifier},
     phase0::primitives::{Slot, H256},
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -317,8 +317,8 @@ impl<P: Preset> BlockSyncService<P> {
                         P2pToSync::BlockNeeded(block_root, peer_id) => {
                             self.request_needed_block(block_root, peer_id)?;
                         }
-                        P2pToSync::DataColumnsNeeded(identifiers, slot) => {
-                            self.request_needed_data_columns(identifiers, slot)?;
+                        P2pToSync::DataColumnsNeeded(data_columns_by_root, slot) => {
+                            self.request_needed_data_columns(data_columns_by_root, slot)?;
                         }
                         P2pToSync::GossipBlobSidecar(blob_sidecar, subnet_id, gossip_id) => {
                             self.data_dumper.dump_blob_sidecar(blob_sidecar.clone_arc());
@@ -998,7 +998,7 @@ impl<P: Preset> BlockSyncService<P> {
 
     fn request_needed_data_columns(
         &mut self,
-        identifiers: Vec<DataColumnIdentifier>,
+        data_columns_by_root: DataColumnsByRootIdentifier,
         slot: Slot,
     ) -> Result<()> {
         let data_column_serve_range_slot = misc::data_column_serve_range_slot::<P>(
@@ -1013,15 +1013,25 @@ impl<P: Preset> BlockSyncService<P> {
             return Ok(());
         }
 
-        let identifiers = identifiers
-            .into_iter()
-            .filter(|identifier| {
-                !self.received_data_column_sidecars.contains_key(identifier)
-                    && !self.controller.contains_block(identifier.block_root)
-            })
-            .collect::<Vec<_>>();
+        let DataColumnsByRootIdentifier {
+            block_root,
+            columns: indices,
+        } = data_columns_by_root;
 
-        if identifiers.is_empty() {
+        let missing_indices = indices
+            .into_iter()
+            .filter(|index| {
+                !self
+                    .received_data_column_sidecars
+                    .contains_key(&DataColumnIdentifier {
+                        block_root,
+                        index: *index,
+                    })
+                    && !self.controller.contains_block(block_root)
+            })
+            .collect::<HashSet<_>>();
+
+        if missing_indices.is_empty() {
             debug!(
                 "cannot request DataColumnSidecarsByRoot: all requested data column sidecars have been received",
             );
@@ -1029,31 +1039,38 @@ impl<P: Preset> BlockSyncService<P> {
             return Ok(());
         }
 
-        let columns_indices = identifiers
-            .iter()
-            .map(|id| id.index)
-            .collect::<HashSet<_>>();
         match self
             .sync_manager
-            .map_peer_custody_columns(columns_indices, slot, false, None)
+            .map_peer_custody_columns(missing_indices, slot, false, None)
         {
             Ok(peer_custody_columns_mapping) => {
-                for (peer_id, columns) in peer_custody_columns_mapping {
+                for (peer_id, column_indices) in peer_custody_columns_mapping {
                     let request_id = self.request_id()?;
 
-                    let custody_columns = identifiers
-                        .iter()
-                        .filter_map(|id| columns.contains(&id.index).then_some(*id))
+                    let identifier = column_indices
+                        .into_iter()
+                        .map(|index| DataColumnIdentifier { block_root, index })
                         .collect::<Vec<_>>();
                     let data_column_identifiers = self
                         .sync_manager
-                        .add_data_columns_request_by_root(custody_columns, peer_id);
+                        .add_data_columns_request_by_root(identifier, peer_id);
 
                     if !data_column_identifiers.is_empty() {
+                        let columns = ContiguousList::try_from(
+                            data_column_identifiers
+                                .into_iter()
+                                .map(|id| id.index)
+                                .collect::<Vec<_>>(),
+                        )
+                        .expect("column indices must not be more than NUMBER_OF_COLUMNS");
+
                         SyncToP2p::RequestDataColumnsByRoot(
                             request_id,
                             peer_id,
-                            data_column_identifiers,
+                            vec![DataColumnsByRootIdentifier {
+                                block_root,
+                                columns,
+                            }],
                         )
                         .send(&self.sync_to_p2p_tx);
                     }

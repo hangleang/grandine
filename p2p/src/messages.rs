@@ -19,7 +19,7 @@ use types::{
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{
         consts::NumberOfColumns,
-        containers::{DataColumnIdentifier, DataColumnSidecar},
+        containers::{DataColumnIdentifier, DataColumnSidecar, DataColumnsByRootIdentifier},
         primitives::ColumnIndex,
     },
     nonstandard::Phase,
@@ -45,7 +45,7 @@ pub enum P2pToSync<P: Preset> {
     StatusPeer(PeerId),
     BlobsNeeded(Vec<BlobIdentifier>, Slot, Option<PeerId>),
     BlockNeeded(H256, Option<PeerId>),
-    DataColumnsNeeded(Vec<DataColumnIdentifier>, Slot),
+    DataColumnsNeeded(DataColumnsByRootIdentifier, Slot),
     RequestedBlobSidecar(Arc<BlobSidecar<P>>, PeerId, RequestId, RPCRequestType),
     RequestedBlock(Arc<SignedBeaconBlock<P>>, PeerId, RequestId, RPCRequestType),
     RequestedDataColumnSidecar(Arc<DataColumnSidecar<P>>, PeerId, RequestId, RPCRequestType),
@@ -138,7 +138,7 @@ pub enum SyncToP2p {
         u64,
         Arc<ContiguousList<ColumnIndex, NumberOfColumns>>,
     ),
-    RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnIdentifier>),
+    RequestDataColumnsByRoot(RequestId, PeerId, Vec<DataColumnsByRootIdentifier>),
     RequestPeerStatus(RequestId, PeerId),
     SubscribeToCoreTopics,
 }

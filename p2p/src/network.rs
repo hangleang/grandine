@@ -50,7 +50,7 @@ use types::{
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{
         consts::NumberOfColumns,
-        containers::{DataColumnIdentifier, DataColumnSidecar},
+        containers::{DataColumnIdentifier, DataColumnSidecar, DataColumnsByRootIdentifier},
         primitives::ColumnIndex,
     },
     nonstandard::{Phase, RelativeEpoch, WithStatus},
@@ -245,10 +245,10 @@ impl<P: Preset> Network<P> {
                             P2pToSync::BlobsNeeded(identifiers, slot, peer_id)
                                 .send(&self.channels.p2p_to_sync_tx);
                         }
-                        BlobFetcherToP2p::DataColumnsNeeded(identifiers, slot) => {
-                            debug!("data columns needed: {identifiers:?}");
+                        BlobFetcherToP2p::DataColumnsNeeded(data_columns_by_root, slot) => {
+                            debug!("data columns needed: {data_columns_by_root:?}");
 
-                            P2pToSync::DataColumnsNeeded(identifiers, slot)
+                            P2pToSync::DataColumnsNeeded(data_columns_by_root, slot)
                                 .send(&self.channels.p2p_to_sync_tx);
                         }
                     }
@@ -1414,6 +1414,7 @@ impl<P: Preset> Network<P> {
                 // > Clients MAY limit the number of blocks and sidecars in the response.
                 let data_column_ids = data_column_ids
                     .into_iter()
+                    .flat_map(Into::<Vec<DataColumnIdentifier>>::into)
                     .take(max_request_data_column_sidecars.try_into()?);
 
                 let data_column_sidecars =
@@ -2103,11 +2104,11 @@ impl<P: Preset> Network<P> {
         &self,
         request_id: RequestId,
         peer_id: PeerId,
-        data_column_identifiers: Vec<DataColumnIdentifier>,
+        data_columns_by_root_identifiers: Vec<DataColumnsByRootIdentifier>,
     ) {
         let request = DataColumnsByRootRequest::new(
             self.controller.chain_config(),
-            data_column_identifiers.into_iter(),
+            data_columns_by_root_identifiers.into_iter(),
         );
 
         debug!(

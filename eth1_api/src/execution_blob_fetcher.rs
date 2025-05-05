@@ -11,14 +11,16 @@ use futures::{
     StreamExt as _,
 };
 use helper_functions::misc;
-use itertools::Itertools as _;
 use log::{debug, warn};
-use ssz::{ContiguousVector, H256};
+use ssz::{ContiguousList, ContiguousVector, H256};
 use try_from_iterator::TryFromIterator as _;
 use types::{
     combined::SignedBeaconBlock,
     deneb::{containers::BlobIdentifier, primitives::BlobIndex},
-    fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
+    fulu::{
+        containers::{DataColumnIdentifier, DataColumnsByRootIdentifier},
+        primitives::ColumnIndex,
+    },
     phase0::primitives::Slot,
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -164,8 +166,11 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 // Request remaining missing blob sidecars from P2P
                 let missing_blob_identifiers = missing_blob_indices
                     .into_iter()
-                    .map(|index| BlobIdentifier { block_root, index })
-                    .filter(|identifier| !self.received_blob_sidecars.contains_key(identifier))
+                    .filter_map(|index| {
+                        let identifier = BlobIdentifier { block_root, index };
+                        (!self.received_blob_sidecars.contains_key(&identifier))
+                            .then_some(identifier)
+                    })
                     .collect::<Vec<_>>();
 
                 debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
@@ -335,25 +340,32 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
 
             if !self.controller.contains_block(block_root) {
                 // Request remaining missing data column sidecars from P2P
-                let missing_data_column_identifiers = missing_columns_indices
+                let missing_indices = missing_columns_indices
                     .into_iter()
-                    .map(|index| DataColumnIdentifier { block_root, index })
-                    .filter(|identifier| {
-                        !self.received_data_column_sidecars.contains_key(identifier)
+                    .filter(|index| {
+                        !self
+                            .received_data_column_sidecars
+                            .contains_key(&DataColumnIdentifier {
+                                block_root,
+                                index: *index,
+                            })
                     })
                     .collect::<Vec<_>>();
 
-                debug!(
-                    "missing data columns sidecars: [{}] at block {block_root}",
-                    missing_data_column_identifiers
-                        .iter()
-                        .map(|id| id.index)
-                        .join(", "),
-                );
+                debug!("missing data columns sidecars: {missing_indices:?} at block {block_root}");
 
-                if !missing_data_column_identifiers.is_empty() {
-                    BlobFetcherToP2p::DataColumnsNeeded(missing_data_column_identifiers, slot)
-                        .send(&self.p2p_tx);
+                if !missing_indices.is_empty() {
+                    let columns = ContiguousList::try_from(missing_indices)
+                        .expect("missing column indices must not be more than NUMBER_OF_COLUMNS");
+
+                    BlobFetcherToP2p::DataColumnsNeeded(
+                        DataColumnsByRootIdentifier {
+                            block_root,
+                            columns,
+                        },
+                        slot,
+                    )
+                    .send(&self.p2p_tx);
                 }
             }
         }
