@@ -699,7 +699,7 @@ pub fn construct_blob_sidecars_from_data_column_sidecars<P: Preset>(
         return Ok(vec![]);
     };
 
-    // TODO(peerdas-fulu): `iterools::chunk_by` behave incorrectly when hsa multiple blobs
+    // TODO(peerdas-fulu): `iterools::chunk_by` behave incorrectly when has multiple blobs
     let mut blobs_matrix_map = BTreeMap::<BlobIndex, Vec<MatrixEntry<P>>>::new();
     for matrix in data_column_sidecars
         .into_iter()
@@ -712,8 +712,8 @@ pub fn construct_blob_sidecars_from_data_column_sidecars<P: Preset>(
     }
 
     let blobs = blobs_matrix_map
-        .into_iter()
-        .map(|(_, blob_matrix)| {
+        .into_values()
+        .map(|blob_matrix| {
             ContiguousVector::try_from_iter(
                 blob_matrix
                     .into_iter()

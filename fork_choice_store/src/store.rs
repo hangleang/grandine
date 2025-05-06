@@ -2134,7 +2134,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             );
         }
 
-        if !origin.is_from_el_or_reconstruction() {
+        if !origin.is_from_el() {
             // [REJECT] The sidecar's kzg_commitments field inclusion proof is valid as verified by verify_data_column_sidecar_inclusion_proof(sidecar).
             ensure!(
                 verify_sidecar_inclusion_proof(&data_column_sidecar),

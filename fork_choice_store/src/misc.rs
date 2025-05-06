@@ -550,7 +550,6 @@ pub enum DataColumnSidecarOrigin {
     BackSync,
     ExecutionLayer,
     Gossip(SubnetId, GossipId),
-    Reconstruction,
     Requested(PeerId),
     Own,
 }
@@ -566,11 +565,7 @@ impl DataColumnSidecarOrigin {
         match self {
             Self::Gossip(_, gossip_id) => (Some(gossip_id), None),
             Self::Api(sender) => (None, sender),
-            Self::BackSync
-            | Self::ExecutionLayer
-            | Self::Own
-            | Self::Reconstruction
-            | Self::Requested(_) => (None, None),
+            Self::BackSync | Self::ExecutionLayer | Self::Own | Self::Requested(_) => (None, None),
         }
     }
 
@@ -582,7 +577,6 @@ impl DataColumnSidecarOrigin {
             | Self::BackSync
             | Self::ExecutionLayer
             | Self::Own
-            | Self::Reconstruction
             | Self::Requested(_) => None,
         }
     }
@@ -592,11 +586,7 @@ impl DataColumnSidecarOrigin {
         match self {
             Self::Gossip(_, gossip_id) => Some(gossip_id.source),
             Self::Requested(peer_id) => Some(*peer_id),
-            Self::Api(_)
-            | Self::BackSync
-            | Self::ExecutionLayer
-            | Self::Own
-            | Self::Reconstruction => None,
+            Self::Api(_) | Self::BackSync | Self::ExecutionLayer | Self::Own => None,
         }
     }
 
@@ -608,7 +598,6 @@ impl DataColumnSidecarOrigin {
             | Self::BackSync
             | Self::ExecutionLayer
             | Self::Own
-            | Self::Reconstruction
             | Self::Requested(_) => None,
         }
     }
@@ -619,8 +608,8 @@ impl DataColumnSidecarOrigin {
     }
 
     #[must_use]
-    pub const fn is_from_el_or_reconstruction(&self) -> bool {
-        matches!(self, Self::ExecutionLayer | Self::Reconstruction)
+    pub const fn is_from_el(&self) -> bool {
+        matches!(self, Self::ExecutionLayer)
     }
 }
 
