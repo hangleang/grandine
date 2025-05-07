@@ -315,9 +315,11 @@ where
                 MutatorMessage::StoreSamplingColumns { sampling_columns } => {
                     self.handle_store_sampling_columns(sampling_columns)
                 }
-                MutatorMessage::ReconstructedMissingColumns { block, full_matrix } => {
-                    self.handle_reconstructed_missing_columns(&block, full_matrix)?
-                }
+                MutatorMessage::ReconstructedMissingColumns {
+                    wait_group,
+                    block,
+                    full_matrix,
+                } => self.handle_reconstructed_missing_columns(wait_group, &block, full_matrix)?,
             }
         }
     }
@@ -611,6 +613,7 @@ where
                                 // columns should be arrived soon or later, so no need to trigger reconstruction.
                                 if !matches!(pending_block.origin, BlockOrigin::Own) {
                                     self.handle_reconstructing_data_column_sidecars(
+                                        wait_group,
                                         pending_block.block.clone_arc(),
                                     );
                                 }
@@ -1411,7 +1414,7 @@ where
     ) {
         match result {
             Ok(DataColumnSidecarAction::Accept(data_column_sidecar)) => {
-                if self.store.is_forward_synced() && origin.is_from_el_or_reconstruction() {
+                if origin.is_from_el() {
                     self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(
                         data_column_sidecar.clone_arc(),
                     ));
@@ -1643,15 +1646,14 @@ where
         }
     }
 
-    fn handle_reconstructing_data_column_sidecars(&mut self, block: Arc<SignedBeaconBlock<P>>) {
+    fn handle_reconstructing_data_column_sidecars(
+        &mut self,
+        wait_group: W,
+        block: Arc<SignedBeaconBlock<P>>,
+    ) {
         let block_root = block.message().hash_tree_root();
 
-        if !self.store.is_sidecars_construction_started(block_root)
-            && !self
-                .store
-                .indices_of_missing_data_columns(&block)
-                .is_empty()
-        {
+        if !self.store.is_sidecars_construction_started(block_root) {
             self.store_mut()
                 .mark_started_sidecars_construction(block_root, block.message().slot());
             self.update_store_snapshot();
@@ -1659,13 +1661,15 @@ where
             self.spawn(ReconstructDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 mutator_tx: self.owned_mutator_tx(),
+                wait_group,
                 block,
             });
         }
     }
 
     fn handle_reconstructed_missing_columns(
-        &self,
+        &mut self,
+        wait_group: W,
         block: &Arc<SignedBeaconBlock<P>>,
         full_matrix: Vec<MatrixEntry<P>>,
     ) -> Result<()> {
@@ -1678,22 +1682,28 @@ where
             let mut data_column_sidecars =
                 eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
                     .into_iter()
-                    .filter(|data_column_sidecar| {
-                        missing_indices.contains(&data_column_sidecar.index)
+                    .filter_map(|data_column_sidecar| {
+                        missing_indices
+                            .contains(&data_column_sidecar.index)
+                            .then_some(Arc::new(data_column_sidecar))
                     })
-                    .map(Arc::new)
                     .collect::<Vec<_>>();
 
             // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
             data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
             debug!(
-                "storing data column sidecars from reconstruction (block: {}, columns: [{}])",
-                block.message().hash_tree_root(),
-                data_column_sidecars.iter().map(|dc| dc.index).join(", "),
+                "storing data column sidecars from reconstruction (slot: {}, columns: {missing_indices:?})",
+                block.message().slot(),
             );
 
-            self.send_to_p2p(P2pMessage::DataColumnReconstructed(data_column_sidecars));
+            for data_column_sidecar in data_column_sidecars {
+                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
+
+                if self.store.is_forward_synced() {
+                    self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(data_column_sidecar));
+                }
+            }
         }
 
         Ok(())

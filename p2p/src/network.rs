@@ -382,11 +382,6 @@ impl<P: Preset> Network<P> {
                                 );
                             }
                         }
-                        P2pMessage::DataColumnReconstructed(data_column_sidecars) => {
-                            for data_column_sidecar in data_column_sidecars {
-                                self.controller.on_reconstruct_data_column_sidecar(data_column_sidecar);
-                            }
-                        }
                         P2pMessage::BlockNeeded(root, peer_id) => {
                             debug!("block needed: {root:?} from {peer_id:?}");
 

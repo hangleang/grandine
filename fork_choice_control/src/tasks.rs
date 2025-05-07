@@ -527,6 +527,7 @@ impl<P: Preset, W> Run for PersistDataColumnSidecarsTask<P, W> {
 pub struct ReconstructDataColumnSidecarsTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P, Storage<P>>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
+    pub wait_group: W,
     pub block: Arc<SignedBeaconBlock<P>>,
 }
 
@@ -535,6 +536,7 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
         let Self {
             store_snapshot,
             mutator_tx,
+            wait_group,
             block,
         } = self;
 
@@ -546,6 +548,11 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
                 let block_root = block.message().hash_tree_root();
                 let available_columns = store_snapshot.available_columns_at_block(block_root);
 
+                debug!(
+                    "cached {} data columns at slot: {}",
+                    available_columns.len(),
+                    block.message().slot()
+                );
                 if available_columns.len() * 2 >= store_snapshot.chain_config().number_of_columns()
                 {
                     let partial_matrix = available_columns
@@ -565,8 +572,12 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
                         store_snapshot.store_config().kzg_backend,
                     ) {
                         Ok(full_matrix) => {
-                            MutatorMessage::ReconstructedMissingColumns { block, full_matrix }
-                                .send(&mutator_tx);
+                            MutatorMessage::ReconstructedMissingColumns {
+                                wait_group,
+                                block,
+                                full_matrix,
+                            }
+                            .send(&mutator_tx);
                         }
                         Err(error) => {
                             warn!("failed to reconstruct missing data column sidecars: {error:?}");
