@@ -541,47 +541,37 @@ impl<P: Preset, W> Run for ReconstructDataColumnSidecarsTask<P, W> {
         } = self;
 
         if let Some(body) = block.message().body().post_deneb() {
-            let missing_indices = store_snapshot.indices_of_missing_data_columns(&block);
+            let block_root = block.message().hash_tree_root();
+            let available_columns = store_snapshot.available_columns_at_block(block_root);
 
-            // Final check to avoid unnecessary computation
-            if !missing_indices.is_empty() {
-                let block_root = block.message().hash_tree_root();
-                let available_columns = store_snapshot.available_columns_at_block(block_root);
+            if !available_columns.is_empty()
+                && available_columns.len() * 2 >= store_snapshot.chain_config().number_of_columns()
+            {
+                let partial_matrix = available_columns
+                    .into_iter()
+                    .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
+                    .collect::<Vec<_>>();
 
                 debug!(
-                    "cached {} data columns at slot: {}",
-                    available_columns.len(),
-                    block.message().slot()
+                    "handling data column sidecars reconstruction at slot: {}",
+                    block.message().slot(),
                 );
-                if available_columns.len() * 2 >= store_snapshot.chain_config().number_of_columns()
-                {
-                    let partial_matrix = available_columns
-                        .into_iter()
-                        .flat_map(|sidecar| misc::compute_matrix_for_data_column_sidecar(&sidecar))
-                        .collect::<Vec<_>>();
 
-                    debug!(
-                        "handling data column sidecars reconstruction (slot: {}, missing columns: {:?})",
-                        block.message().slot(),
-                        missing_indices,
-                    );
-
-                    match eip_7594::recover_matrix(
-                        &partial_matrix,
-                        body.blob_kzg_commitments().len(),
-                        store_snapshot.store_config().kzg_backend,
-                    ) {
-                        Ok(full_matrix) => {
-                            MutatorMessage::ReconstructedMissingColumns {
-                                wait_group,
-                                block,
-                                full_matrix,
-                            }
-                            .send(&mutator_tx);
+                match eip_7594::recover_matrix(
+                    &partial_matrix,
+                    body.blob_kzg_commitments().len(),
+                    store_snapshot.store_config().kzg_backend,
+                ) {
+                    Ok(full_matrix) => {
+                        MutatorMessage::ReconstructedMissingColumns {
+                            wait_group,
+                            block,
+                            full_matrix,
                         }
-                        Err(error) => {
-                            warn!("failed to reconstruct missing data column sidecars: {error:?}");
-                        }
+                        .send(&mutator_tx);
+                    }
+                    Err(error) => {
+                        warn!("failed to reconstruct missing data column sidecars: {error:?}");
                     }
                 }
             }
