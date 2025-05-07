@@ -355,7 +355,7 @@ impl SyncManager {
 
                                 match self.map_peer_custody_columns(
                                     columns_to_request,
-                                    start_slot.saturating_add(count),
+                                    Some(start_slot.saturating_add(count)),
                                     request_multiple_peers_per_column,
                                     None,
                                 ) {
@@ -625,7 +625,7 @@ impl SyncManager {
 
                         match self.map_peer_custody_columns(
                             columns_to_request,
-                            max_slot,
+                            Some(max_slot),
                             request_multiple_peers_per_column,
                             None,
                         ) {
@@ -1070,7 +1070,7 @@ impl SyncManager {
     fn get_available_custodial_peers(
         &self,
         column_index: ColumnIndex,
-        min_head_slot: Slot,
+        min_head_slot: Option<Slot>,
         skip_peer: Option<PeerId>,
     ) -> Vec<PeerId> {
         let mut custodial_peers = if let Some(peers) = self.custodial_peers.get(&column_index) {
@@ -1091,10 +1091,11 @@ impl SyncManager {
             .into_iter()
             .filter(|peer| {
                 !busy_peers.contains(peer)
-                    && self
-                        .peers
-                        .get(peer)
-                        .is_some_and(|status| status.head_slot >= min_head_slot)
+                    && min_head_slot.map_or(true, |min_head_slot| {
+                        self.peers
+                            .get(peer)
+                            .is_some_and(|status| status.head_slot >= min_head_slot)
+                    })
             })
             .collect_vec()
     }
@@ -1102,7 +1103,7 @@ impl SyncManager {
     pub fn map_peer_custody_columns(
         &self,
         column_indices: HashSet<ColumnIndex>,
-        min_head_slot: Slot,
+        min_head_slot: Option<Slot>,
         to_multiple_peers: bool,
         skip_peer: Option<PeerId>,
     ) -> Result<HashMap<PeerId, Vec<ColumnIndex>>> {
@@ -1112,7 +1113,7 @@ impl SyncManager {
             let custodial_peers =
                 self.get_available_custodial_peers(column_index, min_head_slot, skip_peer);
 
-            if to_multiple_peers {
+            if !custodial_peers.is_empty() && to_multiple_peers {
                 for custodial_peer in custodial_peers.choose_multiple(&mut thread_rng(), 2) {
                     peer_columns_mapping
                         .entry(*custodial_peer)
