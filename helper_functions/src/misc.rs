@@ -691,6 +691,7 @@ pub fn construct_blob_sidecars<P: Preset>(
         .collect()
 }
 
+#[expect(clippy::unnecessary_to_owned)]
 pub fn construct_blob_sidecars_from_data_column_sidecars<P: Preset>(
     block: &SignedBeaconBlock<P>,
     data_column_sidecars: impl IntoIterator<Item = Arc<DataColumnSidecar<P>>>,

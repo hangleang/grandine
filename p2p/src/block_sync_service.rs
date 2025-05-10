@@ -706,6 +706,7 @@ impl<P: Preset> BlockSyncService<P> {
 
                             match self.sync_manager.map_peer_custody_columns(
                                 columns_to_request,
+                                None,
                                 Some(start_slot.saturating_add(count)),
                                 false,
                                 Some(peer_id),
@@ -1018,6 +1019,9 @@ impl<P: Preset> BlockSyncService<P> {
             .filter(|identifier| {
                 !self.received_data_column_sidecars.contains_key(identifier)
                     && !self.controller.contains_block(identifier.block_root)
+                    && self
+                        .sync_manager
+                        .ready_to_request_data_column_by_root(identifier, None)
             })
             .collect::<Vec<_>>();
 
@@ -1035,6 +1039,7 @@ impl<P: Preset> BlockSyncService<P> {
             .collect::<HashSet<_>>();
         match self.sync_manager.map_peer_custody_columns(
             columns_indices,
+            None,
             (!self.is_forward_synced).then_some(slot),
             false,
             None,

@@ -1145,7 +1145,12 @@ pub async fn blob_sidecars<P: Preset, W: Wait>(
 
         // TODO(peerdas-fulu): with validator custody, node should reconstruct with any 64 columns,
         // then construct requested blobs, serve to the request
-        if data_column_sidecars.len() == half_columns as usize {
+        if data_column_sidecars.len()
+            == controller
+                .chain_config()
+                .number_of_columns()
+                .saturating_div(2)
+        {
             let blob_sidecars = misc::construct_blob_sidecars_from_data_column_sidecars(
                 &block,
                 data_column_sidecars.into_iter(),

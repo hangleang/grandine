@@ -168,7 +168,7 @@ pub enum MutatorMessage<P: Preset, W> {
     },
     ReconstructedMissingColumns {
         wait_group: W,
-        block: Arc<SignedBeaconBlock<P>>,
+        block_root: H256,
         full_matrix: Vec<MatrixEntry<P>>,
     },
 }

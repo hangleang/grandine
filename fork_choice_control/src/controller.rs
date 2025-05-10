@@ -62,7 +62,7 @@ use crate::{
     storage::Storage,
     tasks::{
         AggregateAndProofTask, AttestationTask, AttesterSlashingTask, BlobSidecarTask, BlockTask,
-        BlockVerifyForGossipTask, ReconstructDataColumnSidecarsTask,
+        BlockVerifyForGossipTask,
     },
     thread_pool::{Spawn, ThreadPool},
     unbounded_sink::UnboundedSink,
@@ -548,21 +548,6 @@ where
             submission_time: Instant::now(),
             metrics: self.metrics.clone(),
         })
-    }
-
-    pub fn on_reconstruct_data_column_sidecars(&self, block: Arc<SignedBeaconBlock<P>>) {
-        if !self
-            .store_snapshot()
-            .indices_of_missing_data_columns(&block)
-            .is_empty()
-        {
-            self.spawn(ReconstructDataColumnSidecarsTask {
-                store_snapshot: self.owned_store_snapshot(),
-                mutator_tx: self.owned_mutator_tx(),
-                wait_group: self.owned_wait_group(),
-                block,
-            });
-        }
     }
 
     pub fn store_back_sync_blob_sidecars(

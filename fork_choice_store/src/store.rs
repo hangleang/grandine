@@ -231,6 +231,7 @@ pub struct Store<P: Preset, S: Storage<P>> {
     blacklisted_blocks: StdHashSet<H256>,
     sampling_columns: StdHashSet<ColumnIndex>,
     sidecars_construction_started: Arc<DashMap<H256, Slot>>,
+    delayed_block_at_slot: HashMap<Slot, H256>,
 }
 
 impl<P: Preset, S: Storage<P>> Store<P, S> {
@@ -317,6 +318,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             blacklisted_blocks,
             sampling_columns: StdHashSet::default(),
             sidecars_construction_started,
+            delayed_block_at_slot: HashMap::default(),
         }
     }
 
@@ -2900,6 +2902,8 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
         self.sidecars_construction_started
             .retain(|_, slot| finalized_slot <= *slot);
+        self.delayed_block_at_slot
+            .retain(|slot, _| finalized_slot <= *slot);
         // TODO(feature/eip-7594):
         //
         // Data columns must be stored for much longer period than finalization.
@@ -3734,12 +3738,20 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .collect()
     }
 
-    pub fn is_sidecars_construction_started(&self, block_root: H256) -> bool {
-        self.sidecars_construction_started.contains_key(&block_root)
+    pub fn is_sidecars_construction_started(&self, block_root: &H256) -> bool {
+        self.sidecars_construction_started.contains_key(block_root)
     }
 
     pub fn mark_started_sidecars_construction(&self, block_root: H256, slot: Slot) {
         self.sidecars_construction_started.insert(block_root, slot);
+    }
+
+    pub fn delay_block_at_slot(&mut self, slot: Slot, block_root: H256) {
+        self.delayed_block_at_slot.insert(slot, block_root);
+    }
+
+    pub fn get_delayed_block_at_slot(&self, slot: Slot) -> Option<&H256> {
+        self.delayed_block_at_slot.get(&slot)
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {
