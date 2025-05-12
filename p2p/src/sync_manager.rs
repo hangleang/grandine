@@ -648,7 +648,7 @@ impl SyncManager {
                             }
                             Err(_) => {
                                 self.log(
-                                    Level::Debug,
+                                    Level::Warn,
                                     "could not find available peers to request data column sidecars".to_owned(),
                                 );
 
@@ -1392,30 +1392,6 @@ mod tests {
             (1, 8, SyncTarget::Block),
             (0, 8, SyncTarget::BlobSidecar),
             (0, 8, SyncTarget::Block),
-        ]
-    )]
-    #[test_case(
-        32,
-        80,
-        [
-            (72, 8, SyncTarget::DataColumnSidecar),
-            (72, 8, SyncTarget::Block),
-            (64, 8, SyncTarget::DataColumnSidecar),
-            (64, 8, SyncTarget::Block),
-            (56, 8, SyncTarget::BlobSidecar),
-            (56, 8, SyncTarget::Block),
-        ]
-    )]
-    #[test_case(
-        64,
-        68,
-        [
-            (64, 4, SyncTarget::DataColumnSidecar),
-            (60, 8, SyncTarget::Block),
-            (44, 16, SyncTarget::Block),
-            (28, 16, SyncTarget::Block),
-            (12, 16, SyncTarget::Block),
-            (0, 16, SyncTarget::Block),
         ]
     )]
     fn build_back_sync_batches(

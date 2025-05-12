@@ -2277,8 +2277,15 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             self.prune_after_finalization();
         }
 
-        self.blob_cache.on_slot(new_tick.slot);
-        self.data_column_cache.on_slot(new_tick.slot);
+        // TODO(peerdas-fulu): NEED REVIEW!
+        //
+        // While syncing, cached data column sidecars often got pruned whenever it struggle to get
+        // all its sampling columns on time, because it is required to have all sampling columns to
+        // spawn persisting task. As a result, it missed persisting those pruned data column sidecars.
+        if self.is_forward_synced() {
+            self.blob_cache.on_slot(new_tick.slot);
+            self.data_column_cache.on_slot(new_tick.slot);
+        }
         self.prune_state_cache(true);
 
         let changes = if self.reorganized(old_head_segment_id) {
@@ -2904,7 +2911,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .retain(|_, slot| finalized_slot <= *slot);
         self.delayed_block_at_slot
             .retain(|slot, _| finalized_slot <= *slot);
-        // TODO(feature/eip-7594):
+        // TODO(feature/eip-7594): NEED REVIEW!
         //
         // Data columns must be stored for much longer period than finalization.
         // However, that should be done in persistence layer.
@@ -3711,6 +3718,14 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         &self,
     ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
         self.data_column_cache.unpersisted_data_column_sidecars()
+    }
+
+    pub fn unpersisted_data_column_sidecars_by_block(
+        &self,
+        block_root: H256,
+    ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
+        self.data_column_cache
+            .unpersisted_data_column_sidecars_by_block(block_root)
     }
 
     pub fn store_sampling_columns(&mut self, sampling_columns: StdHashSet<ColumnIndex>) {

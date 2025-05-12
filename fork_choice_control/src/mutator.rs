@@ -85,8 +85,6 @@ use crate::{
     wait::Wait,
 };
 
-const MAX_COLUMNS_COUNT_TO_PERSIST: usize = 1usize << 15;
-
 #[expect(clippy::struct_field_names)]
 pub struct Mutator<P: Preset, E, W, TS, PS, LS, NS, SS, VS> {
     store: Arc<Store<P, Storage<P>>>,
@@ -1644,12 +1642,13 @@ where
         if self.store.has_unpersisted_data_column_sidecars()
             && (self.store.is_forward_synced()
                 || self.store.unpersisted_data_column_sidecars().count()
-                    >= MAX_COLUMNS_COUNT_TO_PERSIST)
+                    >= self.store.sampling_columns_count())
         {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
                 mutator_tx: self.owned_mutator_tx(),
+                block_root: None,
                 wait_group,
                 metrics: self.metrics.clone(),
             });
@@ -2250,10 +2249,6 @@ where
         let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
         let should_retry_block = self.store.is_forward_synced()
             || accepted_data_columns * 3 >= self.store.sampling_columns_count() * 2;
-        info!(
-            "accepted data column sidecar (index: {}, slot: {slot}), count: {accepted_data_columns}",
-            data_column_sidecar.index,
-        );
 
         // During syncing, if we retry everytime when receiving a sidecar, this might spamming the
         // queue, leading to delaying other data column sidecar tasks
@@ -2266,6 +2261,11 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
+        // Since we need reconstruction whenever local head slot can't move on due to unreliable
+        // peers in unhealthy network, so we shouldn't persist every unpersisted data columns
+        // as it might include those that are associated with a unimported block, and when the
+        // local head can't move, then it can't spawn reconstruction because most of the cached
+        // has been persisted into storage, while it check only in memory.
         if !self.storage.prune_storage_enabled()
             && accepted_data_columns == self.store.sampling_columns_count()
         {
@@ -2273,6 +2273,7 @@ where
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
                 mutator_tx: self.owned_mutator_tx(),
+                block_root: Some(block_root),
                 wait_group: wait_group.clone(),
                 metrics: self.metrics.clone(),
             });
