@@ -16,7 +16,6 @@ use std::{
     time::Instant,
 };
 
-use crate::tasks::DataColumnSidecarTask;
 use anyhow::{Context as _, Result};
 use arc_swap::{ArcSwap, Guard};
 use clock::Tick;
@@ -62,7 +61,7 @@ use crate::{
     storage::Storage,
     tasks::{
         AggregateAndProofTask, AttestationTask, AttesterSlashingTask, BlobSidecarTask, BlockTask,
-        BlockVerifyForGossipTask,
+        BlockVerifyForGossipTask, DataColumnSidecarTask,
     },
     thread_pool::{Spawn, ThreadPool},
     unbounded_sink::UnboundedSink,
@@ -200,7 +199,7 @@ where
     }
 
     pub fn on_store_sampling_columns(&self, sampling_columns: HashSet<ColumnIndex>) {
-        if !self.owned_store_snapshot().has_sampling_columns_stored() {
+        if !self.store_snapshot().has_sampling_columns_stored() {
             MutatorMessage::StoreSamplingColumns { sampling_columns }
                 .send(&self.owned_mutator_tx());
         }
@@ -548,6 +547,29 @@ where
             submission_time: Instant::now(),
             metrics: self.metrics.clone(),
         })
+    }
+
+    pub fn on_reconstruct_data_column_sidecars(&self, slot: Slot) {
+        let store_snapshot = self.store_snapshot();
+        if let Some(block_root) = store_snapshot.get_delayed_block_at_slot(slot) {
+            if !store_snapshot.is_sidecars_construction_started(block_root) {
+                let available_columns_count =
+                    store_snapshot.available_columns_at_block(*block_root).len();
+
+                if available_columns_count < store_snapshot.sampling_columns_count()
+                    && available_columns_count > 0
+                    && available_columns_count * 2
+                        >= store_snapshot.chain_config().number_of_columns()
+                {
+                    MutatorMessage::ReconstructMissingColumns {
+                        wait_group: self.owned_wait_group(),
+                        block_root: *block_root,
+                        slot,
+                    }
+                    .send(&self.mutator_tx);
+                }
+            }
+        }
     }
 
     pub fn store_back_sync_blob_sidecars(

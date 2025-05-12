@@ -166,6 +166,11 @@ pub enum MutatorMessage<P: Preset, W> {
     StoreSamplingColumns {
         sampling_columns: HashSet<ColumnIndex>,
     },
+    ReconstructMissingColumns {
+        wait_group: W,
+        block_root: H256,
+        slot: Slot,
+    },
     ReconstructedMissingColumns {
         wait_group: W,
         block_root: H256,

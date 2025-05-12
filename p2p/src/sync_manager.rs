@@ -946,6 +946,10 @@ impl SyncManager {
         self.custodial_peers = custodial_peers;
     }
 
+    pub const fn is_local_head_not_progress(&self, local_head_slot: Slot) -> bool {
+        local_head_slot <= self.last_sync_head
+    }
+
     /// Log a message with peer count information.
     fn log(&self, level: Level, message: impl Display) {
         log!(

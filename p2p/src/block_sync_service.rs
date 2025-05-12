@@ -814,6 +814,17 @@ impl<P: Preset> BlockSyncService<P> {
                 let local_finalized_slot =
                     misc::compute_start_slot_at_epoch::<P>(snapshot.finalized_epoch());
 
+                if self.sync_manager.is_local_head_not_progress(head_slot)
+                    && self
+                        .controller
+                        .chain_config()
+                        .phase_at_slot::<P>(head_slot + 1)
+                        .is_peerdas_activated()
+                {
+                    self.controller
+                        .on_reconstruct_data_column_sidecars(head_slot + 1);
+                }
+
                 if snapshot.is_forward_synced() {
                     self.set_forward_synced(true)?;
 
