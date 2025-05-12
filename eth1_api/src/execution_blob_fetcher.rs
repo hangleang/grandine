@@ -74,6 +74,11 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
         let slot = block.message().slot();
         let block_root = block.message().hash_tree_root();
 
+        if self.controller.contains_block(block_root) {
+            debug!("cannot fetch blobs from EL: block has been imported");
+            return;
+        }
+
         if let Some(body) = block.message().body().post_deneb() {
             let missing_blob_indices = blob_identifiers
                 .iter()
@@ -162,23 +167,20 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 }
             }
 
-            if !self.controller.contains_block(block_root) {
-                // Request remaining missing blob sidecars from P2P
-                let missing_blob_identifiers = missing_blob_indices
-                    .into_iter()
-                    .filter_map(|index| {
-                        let identifier = BlobIdentifier { block_root, index };
-                        (!self.received_blob_sidecars.contains_key(&identifier))
-                            .then_some(identifier)
-                    })
-                    .collect::<Vec<_>>();
+            // Request remaining missing blob sidecars from P2P
+            let missing_blob_identifiers = missing_blob_indices
+                .into_iter()
+                .filter_map(|index| {
+                    let identifier = BlobIdentifier { block_root, index };
+                    (!self.received_blob_sidecars.contains_key(&identifier)).then_some(identifier)
+                })
+                .collect::<Vec<_>>();
 
-                debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
+            debug!("missing blob sidecars after EL: {missing_blob_identifiers:?}");
 
-                if !missing_blob_identifiers.is_empty() {
-                    BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
-                        .send(&self.p2p_tx);
-                }
+            if !missing_blob_identifiers.is_empty() {
+                BlobFetcherToP2p::BlobsNeeded(missing_blob_identifiers, slot, peer_id)
+                    .send(&self.p2p_tx);
             }
         }
     }
@@ -192,6 +194,13 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
     ) {
         let slot = block.message().slot();
         let block_root = block.message().hash_tree_root();
+
+        if self.controller.contains_block(block_root)
+            || self.sidecars_construction_started.contains_key(&block_root)
+        {
+            debug!("cannot fetch blobs from EL: block has been imported, or being importing");
+            return;
+        }
 
         if let Some(body) = block.message().body().post_deneb() {
             let block_header = block.to_header().message;
@@ -208,14 +217,13 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
 
             if missing_columns_indices.is_empty() {
                 debug!(
-                    "cannot fetch blobs from EL: all requested blob sidecars have been received"
+                    "cannot fetch blobs from EL: all missing data column sidecars have been received"
                 );
                 return;
             }
 
             if self.controller.is_forward_synced()
                 && !self.controller.store_config().disable_engine_getblobs
-                && !self.sidecars_construction_started.contains_key(&block_root)
             {
                 let expected_blobs_count = body.blob_kzg_commitments().len();
                 let versioned_hashes = body
@@ -338,7 +346,7 @@ impl<P: Preset, W: Wait> ExecutionBlobFetcher<P, W> {
                 }
             }
 
-            if !self.controller.contains_block(block_root) {
+            if !self.sidecars_construction_started.contains_key(&block_root) {
                 // Request remaining missing data column sidecars from P2P
                 let missing_indices = missing_columns_indices
                     .into_iter()

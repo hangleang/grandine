@@ -231,6 +231,7 @@ pub struct Store<P: Preset, S: Storage<P>> {
     blacklisted_blocks: StdHashSet<H256>,
     sampling_columns: StdHashSet<ColumnIndex>,
     sidecars_construction_started: Arc<DashMap<H256, Slot>>,
+    delayed_block_at_slot: HashMap<Slot, H256>,
 }
 
 impl<P: Preset, S: Storage<P>> Store<P, S> {
@@ -317,6 +318,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             blacklisted_blocks,
             sampling_columns: StdHashSet::default(),
             sidecars_construction_started,
+            delayed_block_at_slot: HashMap::default(),
         }
     }
 
@@ -2275,8 +2277,15 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             self.prune_after_finalization();
         }
 
-        self.blob_cache.on_slot(new_tick.slot);
-        self.data_column_cache.on_slot(new_tick.slot);
+        // TODO(peerdas-fulu): NEED REVIEW!
+        //
+        // While syncing, cached data column sidecars often got pruned whenever it struggle to get
+        // all its sampling columns on time, because it is required to have all sampling columns to
+        // spawn persisting task. As a result, it missed persisting those pruned data column sidecars.
+        if self.is_forward_synced() {
+            self.blob_cache.on_slot(new_tick.slot);
+            self.data_column_cache.on_slot(new_tick.slot);
+        }
         self.prune_state_cache(true);
 
         let changes = if self.reorganized(old_head_segment_id) {
@@ -2900,7 +2909,9 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .retain(|(slot, _, _), _| finalized_slot <= *slot);
         self.sidecars_construction_started
             .retain(|_, slot| finalized_slot <= *slot);
-        // TODO(feature/eip-7594):
+        self.delayed_block_at_slot
+            .retain(|slot, _| finalized_slot <= *slot);
+        // TODO(feature/eip-7594): NEED REVIEW!
         //
         // Data columns must be stored for much longer period than finalization.
         // However, that should be done in persistence layer.
@@ -3709,6 +3720,14 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         self.data_column_cache.unpersisted_data_column_sidecars()
     }
 
+    pub fn unpersisted_data_column_sidecars_by_block(
+        &self,
+        block_root: H256,
+    ) -> impl Iterator<Item = DataColumnSidecarWithId<P>> + '_ {
+        self.data_column_cache
+            .unpersisted_data_column_sidecars_by_block(block_root)
+    }
+
     pub fn store_sampling_columns(&mut self, sampling_columns: StdHashSet<ColumnIndex>) {
         self.sampling_columns = sampling_columns;
     }
@@ -3734,12 +3753,20 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .collect()
     }
 
-    pub fn is_sidecars_construction_started(&self, block_root: H256) -> bool {
-        self.sidecars_construction_started.contains_key(&block_root)
+    pub fn is_sidecars_construction_started(&self, block_root: &H256) -> bool {
+        self.sidecars_construction_started.contains_key(block_root)
     }
 
     pub fn mark_started_sidecars_construction(&self, block_root: H256, slot: Slot) {
         self.sidecars_construction_started.insert(block_root, slot);
+    }
+
+    pub fn delay_block_at_slot(&mut self, slot: Slot, block_root: H256) {
+        self.delayed_block_at_slot.insert(slot, block_root);
+    }
+
+    pub fn get_delayed_block_at_slot(&self, slot: Slot) -> Option<&H256> {
+        self.delayed_block_at_slot.get(&slot)
     }
 
     pub fn track_collection_metrics(&self, metrics: &Arc<Metrics>) {

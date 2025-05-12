@@ -706,6 +706,7 @@ impl<P: Preset> BlockSyncService<P> {
 
                             match self.sync_manager.map_peer_custody_columns(
                                 columns_to_request,
+                                None,
                                 Some(start_slot.saturating_add(count)),
                                 false,
                                 Some(peer_id),
@@ -812,6 +813,17 @@ impl<P: Preset> BlockSyncService<P> {
 
                 let local_finalized_slot =
                     misc::compute_start_slot_at_epoch::<P>(snapshot.finalized_epoch());
+
+                if self.sync_manager.is_local_head_not_progress(head_slot)
+                    && self
+                        .controller
+                        .chain_config()
+                        .phase_at_slot::<P>(head_slot + 1)
+                        .is_peerdas_activated()
+                {
+                    self.controller
+                        .on_reconstruct_data_column_sidecars(head_slot + 1);
+                }
 
                 if snapshot.is_forward_synced() {
                     self.set_forward_synced(true)?;
@@ -1021,13 +1033,16 @@ impl<P: Preset> BlockSyncService<P> {
         let missing_indices = indices
             .into_iter()
             .filter(|index| {
-                !self
-                    .received_data_column_sidecars
-                    .contains_key(&DataColumnIdentifier {
-                        block_root,
-                        index: *index,
-                    })
+                let identifier = DataColumnIdentifier {
+                    block_root,
+                    index: *index,
+                };
+
+                !self.received_data_column_sidecars.contains_key(&identifier)
                     && !self.controller.contains_block(block_root)
+                    && self
+                        .sync_manager
+                        .ready_to_request_data_column_by_root(&identifier, None)
             })
             .collect::<HashSet<_>>();
 
@@ -1041,6 +1056,7 @@ impl<P: Preset> BlockSyncService<P> {
 
         match self.sync_manager.map_peer_custody_columns(
             missing_indices,
+            None,
             (!self.is_forward_synced).then_some(slot),
             false,
             None,

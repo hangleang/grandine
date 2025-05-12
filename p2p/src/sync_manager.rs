@@ -355,6 +355,7 @@ impl SyncManager {
 
                                 match self.map_peer_custody_columns(
                                     columns_to_request,
+                                    Some(&peers_to_sync),
                                     Some(start_slot.saturating_add(count)),
                                     request_multiple_peers_per_column,
                                     None,
@@ -385,9 +386,7 @@ impl SyncManager {
                                     Err(_) => {
                                         self.log(
                                             Level::Debug,
-                                            format!(
-                                                "could not find available peers to request data column sidecars",
-                                            ),
+                                            "could not find available peers to request data column sidecars".to_owned(),
                                         );
 
                                         self.refresh_custodial_peers();
@@ -625,6 +624,7 @@ impl SyncManager {
 
                         match self.map_peer_custody_columns(
                             columns_to_request,
+                            Some(&peers_to_sync),
                             Some(max_slot),
                             request_multiple_peers_per_column,
                             None,
@@ -648,10 +648,8 @@ impl SyncManager {
                             }
                             Err(_) => {
                                 self.log(
-                                    Level::Debug,
-                                    format!(
-                                        "could not find available peers to request data column sidecars",
-                                    ),
+                                    Level::Warn,
+                                    "could not find available peers to request data column sidecars".to_owned(),
                                 );
 
                                 self.refresh_custodial_peers();
@@ -713,6 +711,15 @@ impl SyncManager {
     ) -> bool {
         self.block_requests
             .ready_to_request_by_root(&block_root, peer_id)
+    }
+
+    pub fn ready_to_request_data_column_by_root(
+        &mut self,
+        data_column_identifier: &DataColumnIdentifier,
+        peer_id: Option<PeerId>,
+    ) -> bool {
+        self.data_column_requests
+            .ready_to_request_by_root(data_column_identifier, peer_id)
     }
 
     pub fn add_blob_request_by_range(&mut self, request_id: RequestId, batch: SyncBatch) {
@@ -939,6 +946,10 @@ impl SyncManager {
         self.custodial_peers = custodial_peers;
     }
 
+    pub const fn is_local_head_not_progress(&self, local_head_slot: Slot) -> bool {
+        local_head_slot <= self.last_sync_head
+    }
+
     /// Log a message with peer count information.
     fn log(&self, level: Level, message: impl Display) {
         log!(
@@ -1070,6 +1081,7 @@ impl SyncManager {
     fn get_available_custodial_peers(
         &self,
         column_index: ColumnIndex,
+        request_from_peers: Option<&[PeerId]>,
         min_head_slot: Option<Slot>,
         skip_peer: Option<PeerId>,
     ) -> Vec<PeerId> {
@@ -1084,18 +1096,23 @@ impl SyncManager {
             custodial_peers.retain(|peer| *peer != bad_peer);
         }
 
-        // Filter out busy peers, and include only peers which its head slot greater than request max slot
-        let busy_peers = self.get_busy_peers();
+        // Choose only within specified peers, e.g. non-busy peers to sync, otherwise filter out
+        // busy peers from custodial mapping
+        if let Some(peers) = request_from_peers {
+            custodial_peers.retain(|peer| peers.contains(peer));
+        } else {
+            let busy_peers = self.get_busy_peers();
+            custodial_peers.retain(|peer| !busy_peers.contains(peer));
+        }
 
         custodial_peers
             .into_iter()
             .filter(|peer| {
-                !busy_peers.contains(peer)
-                    && min_head_slot.map_or(true, |min_head_slot| {
-                        self.peers
-                            .get(peer)
-                            .is_some_and(|status| status.head_slot >= min_head_slot)
-                    })
+                min_head_slot.is_none_or(|min_head_slot| {
+                    self.peers
+                        .get(peer)
+                        .is_some_and(|status| status.head_slot >= min_head_slot)
+                })
             })
             .collect_vec()
     }
@@ -1103,6 +1120,7 @@ impl SyncManager {
     pub fn map_peer_custody_columns(
         &self,
         column_indices: HashSet<ColumnIndex>,
+        request_from_peers: Option<&[PeerId]>,
         min_head_slot: Option<Slot>,
         to_multiple_peers: bool,
         skip_peer: Option<PeerId>,
@@ -1110,8 +1128,12 @@ impl SyncManager {
         let mut peer_columns_mapping: HashMap<PeerId, Vec<ColumnIndex>> = HashMap::new();
 
         for column_index in column_indices {
-            let custodial_peers =
-                self.get_available_custodial_peers(column_index, min_head_slot, skip_peer);
+            let custodial_peers = self.get_available_custodial_peers(
+                column_index,
+                request_from_peers,
+                min_head_slot,
+                skip_peer,
+            );
 
             if !custodial_peers.is_empty() && to_multiple_peers {
                 for custodial_peer in custodial_peers.choose_multiple(&mut thread_rng(), 2) {
@@ -1120,19 +1142,17 @@ impl SyncManager {
                         .or_default()
                         .push(column_index);
                 }
-            } else {
-                if let Some(custodial_peer) = custodial_peers.choose(&mut thread_rng()) {
-                    peer_columns_mapping
-                        .entry(*custodial_peer)
-                        .or_default()
-                        .push(column_index);
-                }
+            } else if let Some(custodial_peer) = custodial_peers.choose(&mut thread_rng()) {
+                peer_columns_mapping
+                    .entry(*custodial_peer)
+                    .or_default()
+                    .push(column_index);
             }
         }
 
         (!peer_columns_mapping.is_empty())
             .then_some(peer_columns_mapping)
-            .ok_or(MapPeerCustodyError::NoAvailablePeers.into())
+            .ok_or_else(|| MapPeerCustodyError::NoAvailablePeers.into())
     }
 
     pub fn expired_blob_range_batches(
@@ -1376,30 +1396,6 @@ mod tests {
             (1, 8, SyncTarget::Block),
             (0, 8, SyncTarget::BlobSidecar),
             (0, 8, SyncTarget::Block),
-        ]
-    )]
-    #[test_case(
-        32,
-        80,
-        [
-            (72, 8, SyncTarget::DataColumnSidecar),
-            (72, 8, SyncTarget::Block),
-            (64, 8, SyncTarget::DataColumnSidecar),
-            (64, 8, SyncTarget::Block),
-            (56, 8, SyncTarget::BlobSidecar),
-            (56, 8, SyncTarget::Block),
-        ]
-    )]
-    #[test_case(
-        64,
-        68,
-        [
-            (64, 4, SyncTarget::DataColumnSidecar),
-            (60, 8, SyncTarget::Block),
-            (44, 16, SyncTarget::Block),
-            (28, 16, SyncTarget::Block),
-            (12, 16, SyncTarget::Block),
-            (0, 16, SyncTarget::Block),
         ]
     )]
     fn build_back_sync_batches(

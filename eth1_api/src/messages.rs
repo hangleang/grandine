@@ -6,11 +6,8 @@ use futures::channel::mpsc::UnboundedSender;
 use log::debug;
 use serde::Serialize;
 use types::{
-    combined::SignedBeaconBlock,
-    deneb::containers::BlobIdentifier,
-    fulu::containers::DataColumnsByRootIdentifier,
-    phase0::primitives::Slot,
-    preset::Preset,
+    combined::SignedBeaconBlock, deneb::containers::BlobIdentifier,
+    fulu::containers::DataColumnsByRootIdentifier, phase0::primitives::Slot, preset::Preset,
 };
 
 pub struct Eth1Metrics {

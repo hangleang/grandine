@@ -85,8 +85,6 @@ use crate::{
     wait::Wait,
 };
 
-const MAX_COLUMNS_COUNT_TO_PERSIST: usize = 1usize << 15;
-
 #[expect(clippy::struct_field_names)]
 pub struct Mutator<P: Preset, E, W, TS, PS, LS, NS, SS, VS> {
     store: Arc<Store<P, Storage<P>>>,
@@ -315,11 +313,20 @@ where
                 MutatorMessage::StoreSamplingColumns { sampling_columns } => {
                     self.handle_store_sampling_columns(sampling_columns)
                 }
+                MutatorMessage::ReconstructMissingColumns {
+                    wait_group,
+                    block_root,
+                    slot,
+                } => {
+                    self.handle_reconstructing_data_column_sidecars(wait_group, block_root, slot);
+                }
                 MutatorMessage::ReconstructedMissingColumns {
                     wait_group,
-                    block,
+                    block_root,
                     full_matrix,
-                } => self.handle_reconstructed_missing_columns(wait_group, &block, full_matrix)?,
+                } => {
+                    self.handle_reconstructed_missing_columns(&wait_group, block_root, full_matrix)?
+                }
             }
         }
     }
@@ -611,10 +618,13 @@ where
                             } else {
                                 // TODO(peerdas-fulu): NEED REVIEW! if block proposed by itself, therefore all sampling
                                 // columns should be arrived soon or later, so no need to trigger reconstruction.
-                                if !matches!(pending_block.origin, BlockOrigin::Own) {
+                                if !matches!(pending_block.origin, BlockOrigin::Own)
+                                    && !self.store.is_sidecars_construction_started(&block_root)
+                                {
                                     self.handle_reconstructing_data_column_sidecars(
                                         wait_group,
-                                        pending_block.block.clone_arc(),
+                                        block_root,
+                                        pending_block.block.message().slot(),
                                     );
                                 }
 
@@ -1639,12 +1649,13 @@ where
         if self.store.has_unpersisted_data_column_sidecars()
             && (self.store.is_forward_synced()
                 || self.store.unpersisted_data_column_sidecars().count()
-                    >= MAX_COLUMNS_COUNT_TO_PERSIST)
+                    >= self.store.sampling_columns_count())
         {
             self.spawn(PersistDataColumnSidecarsTask {
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
                 mutator_tx: self.owned_mutator_tx(),
+                block_root: None,
                 wait_group,
                 metrics: self.metrics.clone(),
             });
@@ -1654,60 +1665,63 @@ where
     fn handle_reconstructing_data_column_sidecars(
         &mut self,
         wait_group: W,
-        block: Arc<SignedBeaconBlock<P>>,
+        block_root: H256,
+        slot: Slot,
     ) {
-        let block_root = block.message().hash_tree_root();
+        self.store_mut()
+            .mark_started_sidecars_construction(block_root, slot);
+        self.update_store_snapshot();
 
-        if !self.store.is_sidecars_construction_started(block_root) {
-            self.store_mut()
-                .mark_started_sidecars_construction(block_root, block.message().slot());
-            self.update_store_snapshot();
-
-            self.spawn(ReconstructDataColumnSidecarsTask {
-                store_snapshot: self.owned_store(),
-                mutator_tx: self.owned_mutator_tx(),
-                wait_group,
-                block,
-            });
-        }
+        self.spawn(ReconstructDataColumnSidecarsTask {
+            store_snapshot: self.owned_store(),
+            mutator_tx: self.owned_mutator_tx(),
+            wait_group,
+            block_root,
+        });
     }
 
     fn handle_reconstructed_missing_columns(
         &mut self,
-        wait_group: W,
-        block: &Arc<SignedBeaconBlock<P>>,
+        wait_group: &W,
+        block_root: H256,
         full_matrix: Vec<MatrixEntry<P>>,
     ) -> Result<()> {
-        let config = self.store.chain_config();
+        let Some(pending) = self.delayed_until_blobs.get(&block_root) else {
+            return Ok(());
+        };
 
-        let missing_indices = self.store.indices_of_missing_data_columns(block);
+        let missing_indices = self.store.indices_of_missing_data_columns(&pending.block);
+        if missing_indices.is_empty() {
+            return Ok(());
+        }
 
-        if !missing_indices.is_empty() {
-            let cells_and_kzg_proofs = eip_7594::construct_cells_and_kzg_proofs(full_matrix)?;
-            let mut data_column_sidecars =
-                eip_7594::construct_data_column_sidecars(block, &cells_and_kzg_proofs, config)?
-                    .into_iter()
-                    .filter_map(|data_column_sidecar| {
-                        missing_indices
-                            .contains(&data_column_sidecar.index)
-                            .then_some(Arc::new(data_column_sidecar))
-                    })
-                    .collect::<Vec<_>>();
+        let cells_and_kzg_proofs = eip_7594::construct_cells_and_kzg_proofs(full_matrix)?;
 
-            // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
-            data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
+        let mut data_column_sidecars = eip_7594::construct_data_column_sidecars(
+            &pending.block,
+            &cells_and_kzg_proofs,
+            self.store.chain_config(),
+        )?
+        .into_iter()
+        .filter_map(|data_column_sidecar| {
+            missing_indices
+                .contains(&data_column_sidecar.index)
+                .then_some(Arc::new(data_column_sidecar))
+        })
+        .collect::<Vec<_>>();
 
-            debug!(
-                "storing data column sidecars from reconstruction (slot: {}, columns: {missing_indices:?})",
-                block.message().slot(),
-            );
+        // > The following data column sidecars, where they exist, MUST be sent in (slot, column_index) order.
+        data_column_sidecars.sort_by_key(|sidecar| (sidecar.slot(), sidecar.index));
 
-            for data_column_sidecar in data_column_sidecars {
-                self.accept_data_column_sidecar(&wait_group, &data_column_sidecar);
+        debug!(
+            "storing data column sidecars from reconstruction (block: {block_root}, columns: {missing_indices:?})",
+        );
 
-                if self.store.is_forward_synced() {
-                    self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(data_column_sidecar));
-                }
+        for data_column_sidecar in data_column_sidecars {
+            self.accept_data_column_sidecar(wait_group, &data_column_sidecar);
+
+            if self.store.is_forward_synced() {
+                self.send_to_p2p(P2pMessage::PublishDataColumnSidecar(data_column_sidecar));
             }
         }
 
@@ -1889,6 +1903,7 @@ where
         );
 
         self.store_mut().store_sampling_columns(sampling_columns);
+        self.update_store_snapshot();
     }
 
     #[expect(clippy::cognitive_complexity)]
@@ -2241,10 +2256,6 @@ where
         let accepted_data_columns = self.store.accepted_data_column_sidecars_at_slot(slot);
         let should_retry_block = self.store.is_forward_synced()
             || accepted_data_columns * 3 >= self.store.sampling_columns_count() * 2;
-        info!(
-            "accepted data column sidecar (index: {}, slot: {slot}), count: {accepted_data_columns}",
-            data_column_sidecar.index,
-        );
 
         // During syncing, if we retry everytime when receiving a sidecar, this might spamming the
         // queue, leading to delaying other data column sidecar tasks
@@ -2257,6 +2268,11 @@ where
         self.event_channels
             .send_data_column_sidecar_event(block_root, data_column_sidecar);
 
+        // Since we need reconstruction whenever local head slot can't move on due to unreliable
+        // peers in unhealthy network, so we shouldn't persist every unpersisted data columns
+        // as it might include those that are associated with a unimported block, and when the
+        // local head can't move, then it can't spawn reconstruction because most of the cached
+        // has been persisted into storage, while it check only in memory.
         if !self.storage.prune_storage_enabled()
             && accepted_data_columns == self.store.sampling_columns_count()
         {
@@ -2264,6 +2280,7 @@ where
                 store_snapshot: self.owned_store(),
                 storage: self.storage.clone_arc(),
                 mutator_tx: self.owned_mutator_tx(),
+                block_root: Some(block_root),
                 wait_group: wait_group.clone(),
                 metrics: self.metrics.clone(),
             });
@@ -2410,6 +2427,10 @@ where
     }
 
     fn delay_block_until_blobs(&mut self, beacon_block_root: H256, pending_block: PendingBlock<P>) {
+        self.store_mut()
+            .delay_block_at_slot(pending_block.block.message().slot(), beacon_block_root);
+        self.update_store_snapshot();
+
         self.delayed_until_blobs
             .insert(beacon_block_root, pending_block);
     }
