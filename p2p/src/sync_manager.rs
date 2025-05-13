@@ -327,11 +327,9 @@ impl SyncManager {
                         }
 
                         if config.phase_at_slot::<P>(start_slot).is_peerdas_activated() {
-                            let mut request_multiple_peers_per_column = false;
                             let columns_to_request = if let Some(received_response) =
                                 self.get_data_column_range_received(start_slot)
                             {
-                                request_multiple_peers_per_column = true;
                                 self.network_globals
                                     .sampling_columns
                                     .iter()
@@ -357,7 +355,6 @@ impl SyncManager {
                                     columns_to_request,
                                     Some(&peers_to_sync),
                                     Some(start_slot.saturating_add(count)),
-                                    request_multiple_peers_per_column,
                                     None,
                                 ) {
                                     Ok(peer_custody_columns_mapping) => {
@@ -597,11 +594,9 @@ impl SyncManager {
 
             if data_availability_serve_range_slot < max_slot {
                 if config.phase_at_slot::<P>(start_slot).is_peerdas_activated() {
-                    let mut request_multiple_peers_per_column = false;
                     let columns_to_request = if let Some(received_response) =
                         self.get_data_column_range_received(start_slot)
                     {
-                        request_multiple_peers_per_column = true;
                         self.network_globals
                             .sampling_columns
                             .iter()
@@ -626,7 +621,6 @@ impl SyncManager {
                             columns_to_request,
                             Some(&peers_to_sync),
                             Some(max_slot),
-                            request_multiple_peers_per_column,
                             None,
                         ) {
                             Ok(peer_custody_columns_mapping) => {
@@ -1078,13 +1072,13 @@ impl SyncManager {
             .collect()
     }
 
-    fn get_available_custodial_peers(
+    fn get_random_custodial_peer(
         &self,
         column_index: ColumnIndex,
         request_from_peers: Option<&[PeerId]>,
         min_head_slot: Option<Slot>,
         skip_peer: Option<PeerId>,
-    ) -> Vec<PeerId> {
+    ) -> Option<PeerId> {
         let mut custodial_peers = if let Some(peers) = self.custodial_peers.get(&column_index) {
             peers.iter().copied().collect()
         } else {
@@ -1106,7 +1100,7 @@ impl SyncManager {
         }
 
         custodial_peers
-            .into_iter()
+            .iter()
             .filter(|peer| {
                 min_head_slot.is_none_or(|min_head_slot| {
                     self.peers
@@ -1114,7 +1108,9 @@ impl SyncManager {
                         .is_some_and(|status| status.head_slot >= min_head_slot)
                 })
             })
-            .collect_vec()
+            .collect_vec();
+
+        custodial_peers.choose(&mut thread_rng()).copied()
     }
 
     pub fn map_peer_custody_columns(
@@ -1122,32 +1118,25 @@ impl SyncManager {
         column_indices: HashSet<ColumnIndex>,
         request_from_peers: Option<&[PeerId]>,
         min_head_slot: Option<Slot>,
-        to_multiple_peers: bool,
         skip_peer: Option<PeerId>,
     ) -> Result<HashMap<PeerId, Vec<ColumnIndex>>> {
-        let mut peer_columns_mapping: HashMap<PeerId, Vec<ColumnIndex>> = HashMap::new();
+        let mut peer_columns_mapping = HashMap::new();
 
         for column_index in column_indices {
-            let custodial_peers = self.get_available_custodial_peers(
+            let Some(custodial_peer) = self.get_random_custodial_peer(
                 column_index,
                 request_from_peers,
                 min_head_slot,
                 skip_peer,
-            );
+            ) else {
+                continue;
+            };
 
-            if !custodial_peers.is_empty() && to_multiple_peers {
-                for custodial_peer in custodial_peers.choose_multiple(&mut thread_rng(), 2) {
-                    peer_columns_mapping
-                        .entry(*custodial_peer)
-                        .or_default()
-                        .push(column_index);
-                }
-            } else if let Some(custodial_peer) = custodial_peers.choose(&mut thread_rng()) {
-                peer_columns_mapping
-                    .entry(*custodial_peer)
-                    .or_default()
-                    .push(column_index);
-            }
+            let peer_custody_columns = peer_columns_mapping
+                .entry(custodial_peer)
+                .or_insert_with(Vec::new);
+
+            peer_custody_columns.push(column_index);
         }
 
         (!peer_columns_mapping.is_empty())

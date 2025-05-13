@@ -708,7 +708,6 @@ impl<P: Preset> BlockSyncService<P> {
                                 columns_to_request,
                                 None,
                                 Some(start_slot.saturating_add(count)),
-                                false,
                                 Some(peer_id),
                             ) {
                                 Ok(peer_custody_columns_mapping) => {
@@ -1058,7 +1057,6 @@ impl<P: Preset> BlockSyncService<P> {
             missing_indices,
             None,
             (!self.is_forward_synced).then_some(slot),
-            false,
             None,
         ) {
             Ok(peer_custody_columns_mapping) => {
