@@ -1,13 +1,12 @@
 use core::{cmp::Ordering, num::NonZeroU64};
 use std::{borrow::Cow, collections::BTreeMap};
 
+use derive_more::Constructor;
 use enum_iterator::Sequence as _;
 use hex_literal::hex;
 use nonzero_ext::nonzero;
-use serde::{
-    de::IgnoredAny,
-    {Deserialize, Serialize},
-};
+use serde::{de::IgnoredAny, Deserialize, Serialize};
+use serde_utils::shared::Sortable;
 use thiserror::Error;
 use typenum::Unsigned as _;
 
@@ -136,8 +135,6 @@ pub struct Config {
     #[serde(with = "serde_utils::string_or_native")]
     pub max_blobs_per_block_electra: usize,
     #[serde(with = "serde_utils::string_or_native")]
-    pub max_blobs_per_block_fulu: usize,
-    #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blocks: u64,
     #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blocks_deneb: u64,
@@ -161,6 +158,8 @@ pub struct Config {
     pub blob_sidecar_subnet_count_electra: NonZeroU64,
     #[serde(with = "serde_utils::string_or_native")]
     pub max_request_blob_sidecars_fulu: u64,
+    #[serde(with = "serde_utils::sorted_list_desc_by_key")]
+    pub blob_schedule: Vec<BlobScheduleEntry>,
 
     // Transition
     pub terminal_block_hash: ExecutionBlockHash,
@@ -259,7 +258,6 @@ impl Default for Config {
             ttfb_timeout: 5,
             max_blobs_per_block: 6,
             max_blobs_per_block_electra: 9,
-            max_blobs_per_block_fulu: 12,
             max_request_blocks: 1024,
             max_request_blocks_deneb: 128,
             max_request_blob_sidecars: 768,
@@ -272,6 +270,7 @@ impl Default for Config {
             max_request_blob_sidecars_electra: 1152,
             blob_sidecar_subnet_count_electra: nonzero!(9_u64),
             max_request_blob_sidecars_fulu: 1536,
+            blob_schedule: Vec::new(),
 
             // Transition
             terminal_block_hash: ExecutionBlockHash::zero(),
@@ -291,6 +290,21 @@ impl Default for Config {
             // Later phases and other unknown variables
             unknown: BTreeMap::new(),
         }
+    }
+}
+
+#[derive(Constructor, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub struct BlobScheduleEntry {
+    #[serde(with = "serde_utils::string_or_native")]
+    pub epoch: Epoch,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub max_blobs_per_block: usize,
+}
+
+impl Sortable for BlobScheduleEntry {
+    fn key(&self) -> impl Ord {
+        self.epoch
     }
 }
 
@@ -319,6 +333,12 @@ impl Config {
             deposit_chain_id: 1,
             deposit_contract_address: H160(hex!("00000000219ab540356cBB839Cbe05303d7705Fa")),
             deposit_network_id: 1,
+
+            // Networking
+            blob_schedule: vec![
+                BlobScheduleEntry::new(269_568, 6),
+                BlobScheduleEntry::new(364_032, 9),
+            ],
 
             // Transition
             terminal_total_difficulty: Difficulty::from_u128(58_750_000_000_000_000_000_000),
@@ -368,6 +388,10 @@ impl Config {
 
             // Networking
             min_epochs_for_block_requests: 272,
+            blob_schedule: vec![
+                BlobScheduleEntry::new(0xFFFF_FFFF_FFFF_FFFF, 6),
+                BlobScheduleEntry::new(0xFFFF_FFFF_FFFF_FFFF, 9),
+            ],
 
             ..Self::default()
         }
@@ -897,6 +921,25 @@ impl Config {
         usize::try_from(self.number_of_columns).expect("should be able to parse number_of_columns")
     }
 
+    pub fn get_max_blobs_per_block(&self, epoch: Epoch) -> Result<usize, Error> {
+        if self.blob_schedule.is_empty() {
+            return Err(Error::BlobScheduleUndefined);
+        }
+
+        // There is no need to sort everytime the function called, `blob_schedule` has been sorted by
+        // `epoch` in descending order.
+        self.blob_schedule
+            .iter()
+            .find_map(|entry| (epoch >= entry.epoch).then_some(entry.max_blobs_per_block))
+            .or_else(|| {
+                self.blob_schedule
+                    .iter()
+                    .map(|entry| entry.max_blobs_per_block)
+                    .min()
+            })
+            .ok_or(Error::BlobScheduleUndefined)
+    }
+
     fn fork_slots<P: Preset>(&self) -> impl Iterator<Item = (Phase, Toption<Slot>)> + '_ {
         enum_iterator::all().map(|phase| (phase, self.fork_slot::<P>(phase)))
     }
@@ -938,6 +981,8 @@ pub enum Error {
     NameEmpty,
     #[error("configuration name contains illegal characters")]
     NameContainsIllegalCharacters,
+    #[error("blob schedule is not defined")]
+    BlobScheduleUndefined,
 }
 
 #[expect(

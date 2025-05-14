@@ -1121,7 +1121,8 @@ pub async fn blob_sidecars<P: Preset, W: Wait>(
 
     let version = block.phase();
     let block_root = block.message().hash_tree_root();
-    let max_blobs_per_block = version.max_blobs_per_block(controller.chain_config());
+    let epoch = misc::compute_epoch_at_slot::<P>(block.message().slot());
+    let max_blobs_per_block = version.max_blobs_per_block(epoch, controller.chain_config())?;
 
     let blob_identifiers = query
         .indices

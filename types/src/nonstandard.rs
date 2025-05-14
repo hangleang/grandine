@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 use std::sync::Arc;
 
+use anyhow::Error as AnyhowError;
 use bit_field::BitField as _;
 use bls::Signature;
 use derive_more::Constructor;
@@ -27,7 +28,7 @@ use crate::{
     },
     electra::containers::ExecutionRequests,
     fulu::containers::{DataColumnIdentifier, DataColumnSidecar},
-    phase0::primitives::{Gwei, Uint256, UnixSeconds, ValidatorIndex, H256},
+    phase0::primitives::{Epoch, Gwei, Uint256, UnixSeconds, ValidatorIndex, H256},
     preset::Preset,
 };
 
@@ -65,19 +66,18 @@ pub enum Phase {
 }
 
 impl Phase {
-    #[must_use]
-    pub fn max_blobs_per_block(self, config: &Config) -> u64 {
+    pub fn max_blobs_per_block(self, epoch: Epoch, config: &Config) -> Result<u64, AnyhowError> {
         let max_blobs = match self {
             Self::Phase0 | Self::Altair | Self::Bellatrix | Self::Capella | Self::Deneb => {
                 config.max_blobs_per_block
             }
             Self::Electra => config.max_blobs_per_block_electra,
-            Self::Fulu => config.max_blobs_per_block_fulu,
+            Self::Fulu => config
+                .get_max_blobs_per_block(epoch)
+                .map_err(AnyhowError::new)?,
         };
 
-        max_blobs
-            .try_into()
-            .expect("number of max blobs in block should fit in u64")
+        max_blobs.try_into().map_err(Into::into)
     }
 
     // Modify condition if we want to change the peerdas activation behaviour

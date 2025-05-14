@@ -1804,7 +1804,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         let max_blobs_per_block = self
             .chain_config()
             .phase_at_slot::<P>(block_header.slot)
-            .max_blobs_per_block(&self.chain_config);
+            .max_blobs_per_block(Self::epoch_at_slot(block_header.slot), &self.chain_config)?;
 
         ensure!(
             blob_sidecar.index < max_blobs_per_block,
@@ -2011,7 +2011,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             return Ok(DataColumnSidecarAction::Ignore(false));
         }
 
-        // [REJECT] The sidecar's index is consistent with NUMBER_OF_COLUMNS -- i.e. sidecar.index < NUMBER_OF_COLUMNS.
+        // [REJECT] The sidecar is valid as verified by verify_data_column_sidecar(sidecar)
         ensure!(
             verify_data_column_sidecar(&data_column_sidecar, &self.chain_config),
             Error::DataColumnSidecarInvalid {
