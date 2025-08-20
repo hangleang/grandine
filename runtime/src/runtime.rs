@@ -56,7 +56,6 @@ use validator::{
     run_validator_api, Validator, ValidatorApiConfig, ValidatorChannels, ValidatorConfig,
 };
 use validator_statistics::ValidatorStatistics;
-
 use crate::misc::{MetricsConfig, StorageConfig};
 
 #[cfg(unix)]
