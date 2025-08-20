@@ -57,10 +57,9 @@ jobs:
     - name: Run tests
       if: runner.os == 'Macos'
       run: cargo test --release --no-fail-fast --no-default-features --features ${{ matrix.backend }} -- --skip behaviour --skip common
-    # For debugging on window-specific error
     - name: Run tests
       if: runner.os != 'Macos'
-      run: cargo test --release --no-default-features --features ${{ matrix.backend }} -- --nocapture
+      run: cargo test --release --no-fail-fast --no-default-features --features ${{ matrix.backend }}
     - name: Check consensus-spec-tests coverage (Linux)
       if: runner.os == 'Linux'
       run: scripts/ci/consensus-spec-tests-coverage.rb
