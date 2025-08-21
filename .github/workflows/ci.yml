@@ -6,11 +6,11 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-2022]
+        os: [ubuntu-latest, macos-latest, windows-2025]
         include:
           - os: ubuntu-latest
             backend: arkworks,blst,constantine,mcl
-          - os: windows-2022
+          - os: windows-2025
             backend: arkworks,constantine,zkcrypto
           - os: macos-latest
             backend: arkworks,blst,mcl
