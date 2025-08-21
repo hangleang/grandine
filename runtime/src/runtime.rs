@@ -1,6 +1,7 @@
 use core::{convert::Infallible as Never, future::Future};
 use std::{collections::HashSet, sync::Arc};
 
+use crate::misc::{MetricsConfig, StorageConfig};
 use anyhow::Result;
 use attestation_verifier::AttestationVerifier;
 use block_producer::BlockProducer;
@@ -56,7 +57,6 @@ use validator::{
     run_validator_api, Validator, ValidatorApiConfig, ValidatorChannels, ValidatorConfig,
 };
 use validator_statistics::ValidatorStatistics;
-use crate::misc::{MetricsConfig, StorageConfig};
 
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
