@@ -639,6 +639,7 @@ pub enum PayloadAttributes<P: Preset> {
     Deneb(PayloadAttributesV3<P>),
     Electra(PayloadAttributesV3<P>),
     Fulu(PayloadAttributesV3<P>),
+    Gloas(PayloadAttributesV3<P>),
 }
 
 impl<P: Preset> PayloadAttributes<P> {
@@ -650,6 +651,7 @@ impl<P: Preset> PayloadAttributes<P> {
             Self::Deneb(_) => Phase::Deneb,
             Self::Electra(_) => Phase::Electra,
             Self::Fulu(_) => Phase::Fulu,
+            Self::Gloas(_) => Phase::Gloas,
         }
     }
 }

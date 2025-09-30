@@ -795,8 +795,9 @@ pub fn validate_attestation_with_verifier<P: Preset>(
         },
     );
 
+    // > [Modified in Gloas:EIP7732] Support index of `0` and `1`
     ensure!(
-        index == 0,
+        state.is_post_gloas() && index < 2 || index == 0,
         Error::<P>::AttestationWithNonZeroCommitteeIndex {
             attestation: attestation.clone().into(),
         },

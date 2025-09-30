@@ -122,7 +122,7 @@ use crate::{
         BeaconBlock as _, BeaconState as _, ExecutionPayload as ExecutionPayloadTrait,
         PostAltairBeaconState, PostBellatrixBeaconState, PostCapellaBeaconState,
         PostDenebBeaconBlockBody, PostElectraBeaconBlockBody, PostElectraBeaconState,
-        PostFuluBeaconState, SignedBeaconBlock as _,
+        PostFuluBeaconState, PostGloasBeaconState, SignedBeaconBlock as _,
     },
 };
 
@@ -372,6 +372,7 @@ impl<P: Preset> BeaconState<P> {
         }
     }
 
+    #[expect(clippy::same_name_method)]
     pub fn post_electra(&self) -> Option<&dyn PostElectraBeaconState<P>> {
         match self {
             Self::Phase0(_)
@@ -408,6 +409,20 @@ impl<P: Preset> BeaconState<P> {
             | Self::Deneb(_)
             | Self::Electra(_) => None,
             Self::Fulu(state) => Some(state),
+            Self::Gloas(_state) => None,
+        }
+    }
+
+    #[expect(clippy::same_name_method)]
+    pub fn post_gloas(&self) -> Option<&dyn PostGloasBeaconState<P>> {
+        match self {
+            Self::Phase0(_)
+            | Self::Altair(_)
+            | Self::Bellatrix(_)
+            | Self::Capella(_)
+            | Self::Deneb(_)
+            | Self::Electra(_)
+            | Self::Fulu(_) => None,
             Self::Gloas(_state) => None,
         }
     }
