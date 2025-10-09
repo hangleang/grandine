@@ -76,7 +76,7 @@ pub struct BuilderPendingWithdrawal {
     pub withdrawable_epoch: Epoch,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default, Deserialize, Serialize, Ssz)]
+#[derive(Clone, PartialEq, Eq, Default, Deserialize, Serialize, Ssz)]
 #[serde(bound = "", deny_unknown_fields)]
 pub struct DataColumnSidecar<P: Preset> {
     #[serde(with = "serde_utils::string_or_native")]
@@ -85,6 +85,8 @@ pub struct DataColumnSidecar<P: Preset> {
     pub kzg_commitments: ContiguousList<KzgCommitment, P::MaxBlobCommitmentsPerBlock>,
     pub kzg_proofs: ContiguousList<KzgProof, P::MaxBlobCommitmentsPerBlock>,
     pub beacon_block_root: H256,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub slot: Slot,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Deserialize, Serialize, Ssz)]

@@ -17,10 +17,9 @@ use ssz::SszHash as _;
 use std_ext::ArcExt as _;
 use typenum::Unsigned as _;
 use types::{
-    combined::{Attestation, AttesterSlashing, BeaconState, SignedBeaconBlock},
+    combined::{Attestation, AttesterSlashing, BeaconState, DataColumnSidecar, SignedBeaconBlock},
     config::Config,
     deneb::containers::{BlobIdentifier, BlobSidecar},
-    fulu::containers::DataColumnSidecar,
     nonstandard::{PayloadStatus, Phase, TimedPowBlock},
     phase0::{
         containers::Checkpoint,
@@ -326,8 +325,10 @@ impl<P: Preset> Context<P> {
         &mut self,
         data_column_sidecar: DataColumnSidecar<P>,
     ) -> Option<P2pMessage<P>> {
-        let subnet_id =
-            misc::compute_subnet_for_data_column_sidecar(self.config(), data_column_sidecar.index);
+        let subnet_id = misc::compute_subnet_for_data_column_sidecar(
+            self.config(),
+            data_column_sidecar.index(),
+        );
 
         self.controller().on_gossip_data_column_sidecar(
             Arc::new(data_column_sidecar),

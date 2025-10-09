@@ -45,7 +45,7 @@ pub fn verify_execution_payload_envelope_signature<P: Preset>(
     Ok(())
 }
 
-pub fn process_execution_payload_for_gossip<P: Preset>(
+pub fn validate_execution_payload_for_gossip<P: Preset>(
     config: &Config,
     state: &impl PostGloasBeaconState<P>,
     envelope: &ExecutionPayloadEnvelope<P>,
@@ -208,7 +208,7 @@ pub fn process_execution_payload<P: Preset, V: Verifier>(
 
     validate_execution_payload(state, signed_envelope)?;
 
-    process_execution_payload_for_gossip(config, state, envelope)?;
+    validate_execution_payload_for_gossip(config, state, envelope)?;
 
     // > Verify the execution payload is valid
     let versioned_hashes = envelope
