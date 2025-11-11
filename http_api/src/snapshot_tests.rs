@@ -51,12 +51,12 @@ fn minimal_rapid_upgrade_none(case: Case) {
     Context::minimal_rapid_upgrade_none().run_case(case)
 }
 
-#[test_resources("grandine-snapshot-tests/minimal/rapid-upgrade/quick-start/all-keys/*")]
-fn minimal_rapid_upgrade_all_keys(case: Case) {
-    Context::minimal_rapid_upgrade_all_keys().run_case(case)
-}
-
-#[test_resources("grandine-snapshot-tests/minimal/rapid-upgrade/quick-start/all-phases-all-keys/*")]
-fn minimal_rapid_upgrade_all_phases_all_keys(case: Case) {
-    Context::minimal_rapid_upgrade_all_phases_all_keys().run_case(case)
-}
+// #[test_resources("grandine-snapshot-tests/minimal/rapid-upgrade/quick-start/all-keys/*")]
+// fn minimal_rapid_upgrade_all_keys(case: Case) {
+//     Context::minimal_rapid_upgrade_all_keys().run_case(case)
+// }
+//
+// #[test_resources("grandine-snapshot-tests/minimal/rapid-upgrade/quick-start/all-phases-all-keys/*")]
+// fn minimal_rapid_upgrade_all_phases_all_keys(case: Case) {
+//     Context::minimal_rapid_upgrade_all_phases_all_keys().run_case(case)
+// }

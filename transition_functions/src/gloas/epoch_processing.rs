@@ -3,7 +3,7 @@ use arithmetic::NonZeroExt as _;
 use helper_functions::{
     accessors::{get_builder_payment_quorum_threshold, get_current_epoch, get_next_epoch},
     electra::is_eligible_for_activation_queue,
-    gloas::compute_exit_epoch_and_update_churn,
+    gloas::{compute_exit_epoch_and_update_churn, initiate_validator_exit},
     misc::{compute_activation_exit_epoch, vec_of_default},
     predicates::{is_active_validator, is_eligible_for_activation},
 };
@@ -70,13 +70,16 @@ pub fn process_epoch(
     );
 
     unphased::process_rewards_and_penalties(state, epoch_deltas);
+    // TODO(gloas): use `electra::process_registry_updates` once compatible
     process_registry_updates(config, state, summaries.as_mut_slice())?;
     electra::process_slashings::<_, ()>(state, summaries);
     unphased::process_eth1_data_reset(state);
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // electra::process_pending_deposits(config, pubkey_cache, state)?;
-    // electra::process_pending_consolidations(state)?;
-    // electra::process_effective_balance_updates(state);
+    // TODO(gloas): use `electra::process_pending_deposits` once compatible
+    process_pending_deposits(config, pubkey_cache, state)?;
+    // TODO(gloas): use `electra::process_pending_consolidations` once compatible
+    process_pending_consolidations(state)?;
+    // TODO(gloas): use `electra::process_effective_balance_updates` once compatible
+    process_effective_balance_updates(state);
     unphased::process_slashings_reset(state);
     unphased::process_randao_mixes_reset(state);
 
@@ -86,9 +89,8 @@ pub fn process_epoch(
     altair::process_participation_flag_updates(state);
     altair::process_sync_committee_updates(pubkey_cache, state)?;
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // fulu::process_proposer_lookahead(config, state)?;
-
+    // TODO(gloas): use `fulu::process_proposer_lookahead` once compatible 
+    process_proposer_lookahead(config, state)?;
     process_builder_pending_payments(config, state)?;
 
     state.cache.advance_epoch();
@@ -109,8 +111,7 @@ fn process_builder_pending_payments<P: Preset>(
 
     for payment in payments.iter().take(P::SlotsPerEpoch::USIZE) {
         if payment.weight > quorum {
-            // TODO(gloas): remove this comment after making `mutators::compute_exit_epoch_and_update_churn`
-            // gloas compatible
+            // TODO(gloas): use `mutators::compute_exit_epoch_and_update_churn` once compatible
             let exit_queue_epoch =
                 compute_exit_epoch_and_update_churn(config, state, payment.withdrawal.amount);
             let withdrawable_epoch =
@@ -155,6 +156,268 @@ fn process_historical_summaries_update<P: Preset>(state: &mut BeaconState<P>) ->
     Ok(())
 }
 
+// TODO(gloas): remove
+use arithmetic::U64Ext as _;
+use helper_functions::{
+    accessors::{self, get_activation_exit_churn_limit},
+    misc::{compute_start_slot_at_epoch, get_max_effective_balance},
+    mutators::{decrease_balance, increase_balance, balance},
+};
+use types::{
+    electra::containers::PendingDeposit,
+    phase0::consts::{GENESIS_SLOT, FAR_FUTURE_EPOCH}
+};
+use ssz::PersistentList;
+pub fn process_pending_deposits<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &mut impl PostGloasBeaconState<P>,
+) -> Result<()> {
+    let next_epoch = get_current_epoch(state) + 1;
+    let available_for_processing =
+        state.deposit_balance_to_consume() + get_activation_exit_churn_limit(config, state);
+
+    let mut processed_amount = 0;
+    let mut next_deposit_index: u64 = 0;
+    let mut deposits_to_postpone = vec![];
+    let mut is_churn_limit_reached = false;
+    let finalized_slot = compute_start_slot_at_epoch::<P>(state.finalized_checkpoint().epoch);
+
+    for deposit in &state.pending_deposits().clone() {
+        // > Do not process deposit requests if Eth1 bridge deposits are not yet applied.
+        if deposit.slot > GENESIS_SLOT
+            && state.eth1_deposit_index() < state.deposit_requests_start_index()
+        {
+            break;
+        }
+
+        // > Check if deposit has been finalized, otherwise, stop processing.
+        if deposit.slot > finalized_slot {
+            break;
+        }
+
+        // > Check if number of processed deposits has not reached the limit, otherwise, stop processing.
+        if next_deposit_index >= P::MAX_PENDING_DEPOSITS_PER_EPOCH {
+            break;
+        }
+
+        let mut is_validator_exited = false;
+        let mut is_validator_withdrawn = false;
+
+        if let Some(validator_index) = accessors::index_of_public_key(state, &deposit.pubkey) {
+            let validator = state.validators().get(validator_index)?;
+
+            is_validator_exited = validator.exit_epoch < FAR_FUTURE_EPOCH;
+            is_validator_withdrawn = validator.withdrawable_epoch < next_epoch;
+        }
+
+        if is_validator_withdrawn {
+            // > Deposited balance will never become active. Increase balance but do not consume churn
+            apply_pending_deposit(config, pubkey_cache, state, deposit)?;
+        } else if is_validator_exited {
+            // > Validator is exiting, postpone the deposit until after withdrawable epoch
+            deposits_to_postpone.push(*deposit);
+        } else {
+            // > Check if deposit fits in the churn, otherwise, do no more deposit processing in this epoch.
+            is_churn_limit_reached = processed_amount + deposit.amount > available_for_processing;
+
+            if is_churn_limit_reached {
+                break;
+            }
+
+            // > Consume churn and apply deposit.
+            processed_amount += deposit.amount;
+            apply_pending_deposit(config, pubkey_cache, state, deposit)?;
+        }
+
+        // > Regardless of how the deposit was handled, we move on in the queue.
+        next_deposit_index += 1;
+    }
+
+    *state.pending_deposits_mut() = PersistentList::try_from_iter(
+        state
+            .pending_deposits()
+            .into_iter()
+            .copied()
+            .skip(next_deposit_index.try_into()?)
+            .chain(deposits_to_postpone.into_iter()),
+    )?;
+
+    if is_churn_limit_reached {
+        *state.deposit_balance_to_consume_mut() = available_for_processing - processed_amount;
+    } else {
+        *state.deposit_balance_to_consume_mut() = 0;
+    }
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+use super::block_processing;
+fn apply_pending_deposit<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &mut impl PostGloasBeaconState<P>,
+    deposit: &PendingDeposit,
+) -> Result<()> {
+    let PendingDeposit {
+        pubkey,
+        withdrawal_credentials,
+        amount,
+        ..
+    } = deposit;
+
+    if let Some(validator_index) = accessors::index_of_public_key(state, &deposit.pubkey) {
+        increase_balance(balance(state, validator_index)?, *amount);
+    } else if is_valid_deposit_signature(config, pubkey_cache, deposit) {
+        block_processing::add_validator_to_registry::<P>(
+            state,
+            *pubkey,
+            *withdrawal_credentials,
+            *amount,
+        )?;
+    }
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+use types::phase0::containers::DepositMessage;
+use helper_functions::signing::SignForAllForks as _;
+fn is_valid_deposit_signature(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    deposit: &PendingDeposit,
+) -> bool {
+    let PendingDeposit {
+        pubkey,
+        withdrawal_credentials,
+        amount,
+        signature,
+        ..
+    } = *deposit;
+
+    let deposit_message = DepositMessage {
+        pubkey,
+        withdrawal_credentials,
+        amount,
+    };
+
+    pubkey_cache
+        .get_or_insert(pubkey)
+        .and_then(|decompressed| deposit_message.verify(config, signature, decompressed))
+        .is_ok()
+}
+
+// TODO(gloas): remove
+pub fn process_pending_consolidations<P: Preset>(
+    state: &mut impl PostGloasBeaconState<P>,
+) -> Result<()> {
+    let next_epoch = get_current_epoch(state) + 1;
+    let mut next_pending_consolidation = 0;
+
+    for pending_consolidation in &state.pending_consolidations().clone() {
+        let source_validator = state.validators().get(pending_consolidation.source_index)?;
+
+        if source_validator.slashed {
+            next_pending_consolidation += 1;
+            continue;
+        }
+
+        if source_validator.withdrawable_epoch > next_epoch {
+            break;
+        }
+
+        // > Calculate the consolidated balance
+        let source_effective_balance = core::cmp::min(
+            state
+                .balances()
+                .get(pending_consolidation.source_index)
+                .copied()?,
+            source_validator.effective_balance,
+        );
+
+        decrease_balance(
+            balance(state, pending_consolidation.source_index)?,
+            source_effective_balance,
+        );
+        increase_balance(
+            balance(state, pending_consolidation.target_index)?,
+            source_effective_balance,
+        );
+
+        next_pending_consolidation += 1;
+    }
+
+    *state.pending_consolidations_mut() = PersistentList::try_from_iter(
+        state
+            .pending_consolidations()
+            .into_iter()
+            .copied()
+            .skip(next_pending_consolidation),
+    )?;
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+pub fn process_effective_balance_updates<P: Preset>(state: &mut impl PostGloasBeaconState<P>) {
+    let hysteresis_increment = P::EFFECTIVE_BALANCE_INCREMENT.get() / P::HYSTERESIS_QUOTIENT;
+    let downward_threshold = hysteresis_increment * P::HYSTERESIS_DOWNWARD_MULTIPLIER;
+    let upward_threshold = hysteresis_increment * P::HYSTERESIS_UPWARD_MULTIPLIER;
+
+    let (validators, balances) = state.validators_mut_with_balances();
+
+    // These could be collected into a vector in `process_slashings`. Doing so speeds up this
+    // function by around ~160 μs in Goerli, but may result in a slowdown in `process_slashings`.
+    // The reason why the speedup is so small is likely because values in the balance tree are
+    // packed into bundles of 8.
+    let mut balances = balances.into_iter().copied();
+
+    // > Update effective balances with hysteresis
+    validators.update(|validator| {
+        let max_effective_balance = get_max_effective_balance::<P>(validator);
+
+        let balance = balances
+            .next()
+            .expect("list of validators and list of balances should have the same length");
+
+        let below = balance + downward_threshold < validator.effective_balance;
+        let above = validator.effective_balance + upward_threshold < balance;
+
+        if below || above {
+            validator.effective_balance = balance
+                .prev_multiple_of(P::EFFECTIVE_BALANCE_INCREMENT)
+                .min(max_effective_balance);
+        }
+    });
+}
+
+// TODO(gloas): remove
+use helper_functions::accessors::get_beacon_proposer_indices;
+fn process_proposer_lookahead<P: Preset>(
+    config: &Config,
+    state: &mut impl PostGloasBeaconState<P>,
+) -> Result<()> {
+    let mut proposer_lookahead = state.proposer_lookahead().into_iter().collect::<Vec<_>>();
+
+    let last_epoch_start = proposer_lookahead
+        .len()
+        .saturating_sub(P::SlotsPerEpoch::USIZE);
+    proposer_lookahead.copy_within(P::SlotsPerEpoch::USIZE.., 0);
+
+    let target_epoch = get_current_epoch(state).saturating_add(P::MinSeedLookahead::U64 + 1);
+    let last_proposers_indices = get_beacon_proposer_indices(config, state, target_epoch)?;
+    let refs = last_proposers_indices.iter().collect::<Vec<&_>>();
+    proposer_lookahead[last_epoch_start..].copy_from_slice(&refs);
+
+    *state.proposer_lookahead_mut() =
+        PersistentVector::try_from_iter(proposer_lookahead.into_iter().copied())?;
+
+    Ok(())
+}
+
+// TODO(gloas): remove this function, reuse `electra::epoch_report`
 pub fn epoch_report<P: Preset>(
     config: &Config,
     pubkey_cache: &PubkeyCache,
@@ -187,6 +450,7 @@ pub fn epoch_report<P: Preset>(
     };
 
     unphased::process_rewards_and_penalties(state, epoch_deltas.iter().copied());
+    // TODO(gloas): use `electra::process_registry_updates` once compatible
     process_registry_updates(config, state, summaries.as_mut_slice())?;
 
     let slashing_penalties = electra::process_slashings(state, summaries.iter().copied());
@@ -195,8 +459,8 @@ pub fn epoch_report<P: Preset>(
     // Do the rest of epoch processing to leave the state valid for further transitions.
     // This way it can be used to calculate statistics for multiple epochs in a row.
     unphased::process_eth1_data_reset(state);
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // electra::process_effective_balance_updates(state);
+    // TODO(gloas): use `electra::process_effective_balance_updates` once compatible
+    process_effective_balance_updates(state);
     unphased::process_slashings_reset(state);
     unphased::process_randao_mixes_reset(state);
     unphased::process_historical_roots_update(state)?;
@@ -214,6 +478,7 @@ pub fn epoch_report<P: Preset>(
     })
 }
 
+// TODO(gloas): remove this function, reuse `electra::process_registry_updates`
 fn process_registry_updates<P: Preset>(
     config: &Config,
     state: &mut BeaconState<P>,
@@ -257,8 +522,8 @@ fn process_registry_updates<P: Preset>(
     for validator_index in ejections {
         let index = usize::try_from(validator_index)?;
 
-        // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-        // initiate_validator_exit(config, state, validator_index)?;
+        // TODO(gloas): use `electra::initiate_validator_exit` once it compatible
+        initiate_validator_exit(config, state, validator_index)?;
 
         // `process_slashings` depends on `Validator.withdrawable_epoch`,
         // which may have been modified by `initiate_validator_exit`.
@@ -370,20 +635,19 @@ mod spec_tests {
         run_eth1_data_reset_case::<Minimal>(case);
     }
 
-    // TODO(gloas): uncomment after `state` param is compatible with GloasBeaconState
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/effective_balance_updates/*/*"
-    // )]
-    // fn mainnet_effective_balance_updates(case: Case) {
-    //     run_effective_balance_updates_case::<Mainnet>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/minimal/gloas/epoch_processing/effective_balance_updates/*/*"
-    // )]
-    // fn minimal_effective_balance_updates(case: Case) {
-    //     run_effective_balance_updates_case::<Minimal>(case);
-    // }
+    #[test_resources(
+        "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/effective_balance_updates/*/*"
+    )]
+    fn mainnet_effective_balance_updates(case: Case) {
+        run_effective_balance_updates_case::<Mainnet>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/minimal/gloas/epoch_processing/effective_balance_updates/*/*"
+    )]
+    fn minimal_effective_balance_updates(case: Case) {
+        run_effective_balance_updates_case::<Minimal>(case);
+    }
 
     #[test_resources(
         "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/slashings_reset/*/*"
@@ -449,48 +713,47 @@ mod spec_tests {
         run_sync_committee_updates_case::<Minimal>(case);
     }
 
-    // TODO(gloas): uncomment the following functions after `state` param is compatible with GloasBeaconState
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/pending_deposits/*/*"
-    // )]
-    // fn mainnet_pending_deposits(case: Case) {
-    //     run_pending_deposits_case::<Mainnet>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/minimal/gloas/epoch_processing/pending_deposits/*/*"
-    // )]
-    // fn minimal_pending_deposits(case: Case) {
-    //     run_pending_deposits_case::<Minimal>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/pending_consolidations/*/*"
-    // )]
-    // fn mainnet_pending_consolidations(case: Case) {
-    //     run_pending_consolidations_case::<Mainnet>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/minimal/gloas/epoch_processing/pending_consolidations/*/*"
-    // )]
-    // fn minimal_pending_consolidations(case: Case) {
-    //     run_pending_consolidations_case::<Minimal>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/proposer_lookahead/*/*"
-    // )]
-    // fn mainnet_process_look(case: Case) {
-    //     run_process_look_case::<Mainnet>(case);
-    // }
-    //
-    // #[test_resources(
-    //     "consensus-spec-tests/tests/minimal/gloas/epoch_processing/proposer_lookahead/*/*"
-    // )]
-    // fn minimal_process_look(case: Case) {
-    //     run_process_look_case::<Minimal>(case);
-    // }
+    #[test_resources(
+        "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/pending_deposits/*/*"
+    )]
+    fn mainnet_pending_deposits(case: Case) {
+        run_pending_deposits_case::<Mainnet>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/minimal/gloas/epoch_processing/pending_deposits/*/*"
+    )]
+    fn minimal_pending_deposits(case: Case) {
+        run_pending_deposits_case::<Minimal>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/pending_consolidations/*/*"
+    )]
+    fn mainnet_pending_consolidations(case: Case) {
+        run_pending_consolidations_case::<Mainnet>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/minimal/gloas/epoch_processing/pending_consolidations/*/*"
+    )]
+    fn minimal_pending_consolidations(case: Case) {
+        run_pending_consolidations_case::<Minimal>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/proposer_lookahead/*/*"
+    )]
+    fn mainnet_process_look(case: Case) {
+        run_process_look_case::<Mainnet>(case);
+    }
+
+    #[test_resources(
+        "consensus-spec-tests/tests/minimal/gloas/epoch_processing/proposer_lookahead/*/*"
+    )]
+    fn minimal_process_look(case: Case) {
+        run_process_look_case::<Minimal>(case);
+    }
 
     #[test_resources(
         "consensus-spec-tests/tests/mainnet/gloas/epoch_processing/builder_pending_payments/*/*"
@@ -553,6 +816,7 @@ mod spec_tests {
         run_case::<P>(case, |_, state| {
             let mut summaries: Vec<ValidatorSummary> = vec_of_default(state);
 
+            // TODO(gloas): use `electra::process_registry_updates`
             process_registry_updates(&P::default_config(), state, summaries.as_mut_slice())
         });
     }
@@ -575,14 +839,14 @@ mod spec_tests {
         });
     }
 
-    // TODO(gloas): uncomment after `state` param is compatible with GloasBeaconState
-    // fn run_effective_balance_updates_case<P: Preset>(case: Case) {
-    //     run_case::<P>(case, |_, state| {
-    //         electra::process_effective_balance_updates(state);
-    //
-    //         Ok(())
-    //     });
-    // }
+    fn run_effective_balance_updates_case<P: Preset>(case: Case) {
+        run_case::<P>(case, |_, state| {
+            // TODO(gloas): use `electra::process_effective_balance_updates`
+            process_effective_balance_updates(state);
+
+            Ok(())
+        });
+    }
 
     fn run_slashings_reset_case<P: Preset>(case: Case) {
         run_case::<P>(case, |_, state| {
@@ -616,24 +880,26 @@ mod spec_tests {
         run_case::<P>(case, altair::process_sync_committee_updates);
     }
 
-    // TODO(gloas): uncomment the following functions after `state` param is compatible with GloasBeaconState
-    // fn run_pending_deposits_case<P: Preset>(case: Case) {
-    //     run_case::<P>(case, |pubkey_cache, state| {
-    //         electra::process_pending_deposits(&P::default_config(), pubkey_cache, state)
-    //     });
-    // }
-    //
-    // fn run_pending_consolidations_case<P: Preset>(case: Case) {
-    //     run_case::<P>(case, |_, state| {
-    //         electra::process_pending_consolidations(state)
-    //     })
-    // }
-    //
-    // fn run_process_look_case<P: Preset>(case: Case) {
-    //     run_case::<P>(case, |_, state| {
-    //         fulu::process_proposer_lookahead(&P::default_config(), state)
-    //     })
-    // }
+    fn run_pending_deposits_case<P: Preset>(case: Case) {
+        run_case::<P>(case, |pubkey_cache, state| {
+            // TODO(gloas): use `electra::process_pending_deposits`
+            process_pending_deposits(&P::default_config(), pubkey_cache, state)
+        });
+    }
+
+    fn run_pending_consolidations_case<P: Preset>(case: Case) {
+        run_case::<P>(case, |_, state| {
+            // TODO(gloas): use `electra::process_pending_consolidations`
+            process_pending_consolidations(state)
+        })
+    }
+
+    fn run_process_look_case<P: Preset>(case: Case) {
+        run_case::<P>(case, |_, state| {
+            // TODO(gloas): use `fulu::process_proposer_lookahead`
+            process_proposer_lookahead(&P::default_config(), state)
+        })
+    }
 
     fn run_process_builder_pending_payments_case<P: Preset>(case: Case) {
         run_case::<P>(case, |_, state| {

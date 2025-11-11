@@ -706,41 +706,38 @@ pub fn process_operations<P: Preset, V: Verifier>(
 
     // The conditional is not needed for correctness.
     // It only serves to avoid overhead when processing blocks with no deposits.
-    // TODO: (gloas): uncomment below block once `electra::apply_deposits` gloas compatible
-    //
-    // if !body.deposits().is_empty() {
-    //     let combined_deposits = unphased::validate_deposits(
-    //         config,
-    //         pubkey_cache,
-    //         state,
-    //         body.deposits().iter().copied(),
-    //     )?;
-    //
-    //     let deposit_count = body.deposits().len();
-    //
-    //     // > Deposits must be processed in order
-    //     *state.eth1_deposit_index_mut() += DepositIndex::try_from(deposit_count)?;
-    //
-    //     electra::apply_deposits(state, combined_deposits, slot_report)?;
-    // }
+    if !body.deposits().is_empty() {
+        let combined_deposits = unphased::validate_deposits(
+            config,
+            pubkey_cache,
+            state,
+            body.deposits().iter().copied(),
+        )?;
 
-    // TODO: (gloas): uncomment below block once `electra::process_voluntary_exit` gloas compatible
-    //
-    // for voluntary_exit in body.voluntary_exits().iter().copied() {
-    //     electra::process_voluntary_exit(config, pubkey_cache, state, voluntary_exit, &mut verifier)?;
-    // }
+        let deposit_count = body.deposits().len();
 
-    // TODO: (gloas): uncomment below block once `capella::process_bls_to_execution_change` gloas compatible
-    //
-    // for bls_to_execution_change in body.bls_to_execution_changes().iter().copied() {
-    //     capella::process_bls_to_execution_change(
-    //         config,
-    //         pubkey_cache,
-    //         state,
-    //         bls_to_execution_change,
-    //         &mut verifier,
-    //     )?;
-    // }
+        // > Deposits must be processed in order
+        *state.eth1_deposit_index_mut() += DepositIndex::try_from(deposit_count)?;
+
+        // TODO(gloas): use `electra::apply_deposits` once compatible
+        apply_deposits(state, combined_deposits, slot_report)?;
+    }
+
+    for voluntary_exit in body.voluntary_exits().iter().copied() {
+        // TODO(glaos): use `electra::process_voluntary_exit` once compatible
+        process_voluntary_exit(config, pubkey_cache, state, voluntary_exit, &mut verifier)?;
+    }
+
+    for bls_to_execution_change in body.bls_to_execution_changes().iter().copied() {
+        // TODO(gloas): use `capella::process_bls_to_execution_change` once compatible
+        process_bls_to_execution_change(
+            config,
+            pubkey_cache,
+            state,
+            bls_to_execution_change,
+            &mut verifier,
+        )?;
+    }
 
     for payload_attestation in body.payload_attestations().iter().copied() {
         process_payload_attestation(
@@ -1050,6 +1047,27 @@ pub fn process_attester_slashing<P: Preset>(
     Ok(())
 }
 
+// TODO(gloas): remove
+use helper_functions::gloas::initiate_validator_exit;
+pub fn process_voluntary_exit<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &mut impl PostGloasBeaconState<P>,
+    signed_voluntary_exit: SignedVoluntaryExit,
+    verifier: impl Verifier,
+) -> Result<()> {
+    validate_voluntary_exit_with_verifier(
+        config,
+        pubkey_cache,
+        state,
+        signed_voluntary_exit,
+        verifier,
+    )?;
+
+    // > Initiate exit
+    initiate_validator_exit(config, state, signed_voluntary_exit.message.validator_index)
+}
+
 // TODO: (gloas): remove once `electra::validate_voluntary_exit` gloas compatible
 pub fn validate_voluntary_exit<P: Preset>(
     config: &Config,
@@ -1067,6 +1085,7 @@ pub fn validate_voluntary_exit<P: Preset>(
 }
 
 // TODO: (gloas): remove once `electra::validate_voluntary_exit` gloas compatible
+use helper_functions::accessors::get_pending_balance_to_withdraw_post_gloas;
 pub fn validate_voluntary_exit_with_verifier<P: Preset>(
     config: &Config,
     pubkey_cache: &PubkeyCache,
@@ -1083,10 +1102,289 @@ pub fn validate_voluntary_exit_with_verifier<P: Preset>(
     )?;
 
     // > [New in Electra:EIP7251] Only exit validator if it has no pending withdrawals in the queue
-    // ensure!(
-    //     get_pending_balance_to_withdraw(state, signed_voluntary_exit.message.validator_index) == 0,
-    //     Error::<P>::VoluntaryExitWithPendingWithdrawals,
-    // );
+    ensure!(
+        get_pending_balance_to_withdraw_post_gloas(
+            state,
+            signed_voluntary_exit.message.validator_index
+        ) == 0,
+        Error::<P>::VoluntaryExitWithPendingWithdrawals,
+    );
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+use crate::unphased::CombinedDeposit;
+use itertools::izip;
+use types::electra::containers::PendingDeposit;
+use types::phase0::consts::GENESIS_SLOT;
+use types::phase0::primitives::DepositIndex;
+pub fn apply_deposits<P: Preset>(
+    state: &mut impl PostGloasBeaconState<P>,
+    combined_deposits: impl IntoIterator<Item = CombinedDeposit>,
+    mut slot_report: impl SlotReport,
+) -> Result<()> {
+    let mut pending_deposits_with_positions = vec![];
+
+    for combined_deposit in combined_deposits {
+        match combined_deposit {
+            // > Add validator and balance entries
+            CombinedDeposit::NewValidator {
+                pubkey,
+                withdrawal_credentials,
+                amounts,
+                signatures,
+                positions,
+            } => {
+                let first_withdrawal_credentials = withdrawal_credentials[0];
+                let validator_index = state.validators().len_u64();
+
+                add_validator_to_registry(state, pubkey, first_withdrawal_credentials, 0)?;
+
+                for (withdrawal_credentials, amount, signature, position) in
+                    izip!(withdrawal_credentials, amounts, signatures, positions)
+                {
+                    pending_deposits_with_positions.push((
+                        PendingDeposit {
+                            pubkey,
+                            withdrawal_credentials,
+                            amount,
+                            signature,
+                            slot: GENESIS_SLOT,
+                        },
+                        position,
+                    ));
+
+                    // TODO(feature/electra):
+                    slot_report.add_deposit(validator_index, amount);
+                }
+            }
+            // > Increase balance by deposit amount
+            CombinedDeposit::TopUp {
+                validator_index,
+                withdrawal_credentials,
+                amounts,
+                signatures,
+                positions,
+            } => {
+                let pubkey = accessors::public_key(state, validator_index)?;
+
+                for (withdrawal_credentials, amount, signature, position) in
+                    izip!(withdrawal_credentials, amounts, signatures, positions)
+                {
+                    pending_deposits_with_positions.push((
+                        PendingDeposit {
+                            pubkey: *pubkey,
+                            withdrawal_credentials,
+                            amount,
+                            signature,
+                            slot: GENESIS_SLOT,
+                        },
+                        position,
+                    ));
+
+                    slot_report.add_deposit(validator_index, amount);
+                }
+            }
+        }
+    }
+
+    pending_deposits_with_positions.sort_unstable_by_key(|(_, position)| *position);
+
+    for (pending_deposit, _) in pending_deposits_with_positions {
+        state.pending_deposits_mut().push(pending_deposit)?;
+    }
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+use helper_functions::accessors::index_of_public_key;
+use helper_functions::signing::SignForAllForks as _;
+use helper_functions::slot_report::NullSlotReport;
+use types::nonstandard::smallvec;
+use types::phase0::containers::DepositData;
+use types::phase0::containers::DepositMessage;
+use types::phase0::primitives::ValidatorIndex;
+pub fn process_deposit_data<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &mut impl PostGloasBeaconState<P>,
+    deposit_data: DepositData,
+) -> Result<Option<ValidatorIndex>> {
+    let DepositData {
+        pubkey,
+        withdrawal_credentials,
+        amount,
+        signature,
+    } = deposit_data;
+
+    *state.eth1_deposit_index_mut() += 1;
+
+    if let Some(validator_index) = index_of_public_key(state, &pubkey) {
+        let combined_deposit = CombinedDeposit::TopUp {
+            validator_index,
+            withdrawal_credentials: vec![withdrawal_credentials],
+            amounts: smallvec![amount],
+            signatures: vec![signature],
+            positions: smallvec![0],
+        };
+
+        apply_deposits(state, core::iter::once(combined_deposit), NullSlotReport)?;
+
+        return Ok(Some(validator_index));
+    }
+
+    // > Verify the deposit signature (proof of possession)
+    // > which is not checked by the deposit contract
+    let deposit_message = DepositMessage::from(deposit_data);
+
+    // > Fork-agnostic domain since deposits are valid across forks
+    if let Ok(decompressed) = pubkey_cache.get_or_insert(pubkey) {
+        if deposit_message
+            .verify(config, signature, decompressed)
+            .is_ok()
+        {
+            let validator_index = state.validators().len_u64();
+
+            let combined_deposit = CombinedDeposit::NewValidator {
+                pubkey,
+                withdrawal_credentials: vec![withdrawal_credentials],
+                amounts: smallvec![amount],
+                signatures: vec![signature],
+                positions: smallvec![0],
+            };
+
+            apply_deposits(state, core::iter::once(combined_deposit), NullSlotReport)?;
+
+            return Ok(Some(validator_index));
+        }
+    }
+
+    Ok(None)
+}
+
+// TODO(gloas): remove this function
+use arithmetic::U64Ext;
+use bls::PublicKeyBytes;
+use types::phase0::containers::Validator;
+use types::phase0::primitives::Gwei;
+pub fn add_validator_to_registry<P: Preset>(
+    state: &mut impl PostGloasBeaconState<P>,
+    pubkey: PublicKeyBytes,
+    withdrawal_credentials: H256,
+    amount: Gwei,
+) -> Result<()> {
+    let validator_index = state.validators().len_u64();
+
+    let mut validator = Validator {
+        pubkey,
+        withdrawal_credentials,
+        effective_balance: 0,
+        slashed: false,
+        activation_eligibility_epoch: FAR_FUTURE_EPOCH,
+        activation_epoch: FAR_FUTURE_EPOCH,
+        exit_epoch: FAR_FUTURE_EPOCH,
+        withdrawable_epoch: FAR_FUTURE_EPOCH,
+    };
+
+    let max_effective_balance = get_max_effective_balance::<P>(&validator);
+
+    validator.effective_balance = amount
+        .prev_multiple_of(P::EFFECTIVE_BALANCE_INCREMENT)
+        .min(max_effective_balance);
+
+    state.validators_mut().push(validator)?;
+    state.balances_mut().push(amount)?;
+    state.previous_epoch_participation_mut().push(0)?;
+    state.current_epoch_participation_mut().push(0)?;
+    state.inactivity_scores_mut().push(0)?;
+
+    state
+        .cache_mut()
+        .validator_indices
+        .get_mut()
+        .expect(
+            "state.cache.validator_indices is initialized by \
+                index_of_public_key, which is called before apply_deposits",
+        )
+        .insert(pubkey, validator_index);
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+use helper_functions::misc;
+use types::capella::containers::SignedBlsToExecutionChange;
+pub fn process_bls_to_execution_change<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &mut impl PostGloasBeaconState<P>,
+    bls_to_execution_change: SignedBlsToExecutionChange,
+    verifier: impl Verifier,
+) -> Result<()> {
+    validate_bls_to_execution_change_with_verifier(
+        config,
+        pubkey_cache,
+        state,
+        bls_to_execution_change,
+        verifier,
+    )?;
+
+    let address_change = bls_to_execution_change.message;
+
+    let validator = state
+        .validators_mut()
+        .get_mut(address_change.validator_index)?;
+
+    validator.withdrawal_credentials =
+        misc::eth1_address_withdrawal_credentials(address_change.to_execution_address);
+
+    Ok(())
+}
+
+// TODO(gloas): remove
+fn validate_bls_to_execution_change<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &(impl PostGloasBeaconState<P> + ?Sized),
+    bls_to_execution_change: SignedBlsToExecutionChange,
+) -> Result<()> {
+    validate_bls_to_execution_change_with_verifier(
+        config,
+        pubkey_cache,
+        state,
+        bls_to_execution_change,
+        SingleVerifier,
+    )
+}
+
+// TODO(gloas): remove
+use helper_functions::signing::SignForAllForksWithGenesis as _;
+fn validate_bls_to_execution_change_with_verifier<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &(impl PostGloasBeaconState<P> + ?Sized),
+    bls_to_execution_change: SignedBlsToExecutionChange,
+    mut verifier: impl Verifier,
+) -> Result<()> {
+    let address_change = bls_to_execution_change.message;
+    let validator = state.validators().get(address_change.validator_index)?;
+    let in_state = validator.withdrawal_credentials;
+    let in_block = misc::bls_withdrawal_credentials(address_change.from_bls_pubkey);
+
+    ensure!(
+        in_state == in_block,
+        Error::<P>::WithdrawalCredentialsMismatch { in_state, in_block },
+    );
+
+    // > Fork-agnostic domain since address changes are valid across forks
+    verifier.verify_singular(
+        address_change.signing_root(config, state),
+        bls_to_execution_change.signature,
+        pubkey_cache.get_or_insert(address_change.from_bls_pubkey)?,
+        SignatureKind::BlsToExecutionChange,
+    )?;
 
     Ok(())
 }
@@ -1101,6 +1399,7 @@ mod spec_tests {
     use test_generator::test_resources;
     use types::{
         electra::containers::{Attestation, AttesterSlashing},
+        phase0::containers::Deposit,
         preset::{Mainnet, Minimal},
     };
 
@@ -1221,62 +1520,62 @@ mod spec_tests {
         "consensus-spec-tests/tests/minimal/gloas/operations/attestation/*/*",
     }
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // processing_tests! {
-    //     process_bls_to_execution_change,
-    //     |config, pubkey_cache, state, bls_to_execution_change, _| {
-    //         capella::process_bls_to_execution_change(
-    //             config,
-    //             pubkey_cache,
-    //             state,
-    //             bls_to_execution_change,
-    //             SingleVerifier,
-    //         )
-    //     },
-    //     "address_change",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/bls_to_execution_change/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/bls_to_execution_change/*/*",
-    // }
+    processing_tests! {
+        process_bls_to_execution_change,
+        |config, pubkey_cache, state, bls_to_execution_change, _| {
+            // TODO(gloas): use `capella::process_bls_to_execution_change`
+            process_bls_to_execution_change(
+                config,
+                pubkey_cache,
+                state,
+                bls_to_execution_change,
+                SingleVerifier,
+            )
+        },
+        "address_change",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/bls_to_execution_change/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/bls_to_execution_change/*/*",
+    }
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // processing_tests! {
-    //     process_deposit,
-    //     |config, pubkey_cache, state, deposit, _| process_deposit(config, pubkey_cache, state, deposit),
-    //     "deposit",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/deposit/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/deposit/*/*",
-    // }
-    //
+    processing_tests! {
+        process_deposit,
+        |config, pubkey_cache, state, deposit, _| process_deposit(config, pubkey_cache, state, deposit),
+        "deposit",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/deposit/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/deposit/*/*",
+    }
+
     // `process_deposit_data` reimplements deposit validation differently for performance reasons,
     // so we need to test it separately.
-    // processing_tests! {
-    //     process_deposit_data,
-    //     |config, pubkey_cache, state, deposit, _| {
-    //         unphased::verify_deposit_merkle_branch(state, state.eth1_deposit_index, deposit)?;
-    //         electra::process_deposit_data(config, pubkey_cache, state, deposit.data)?;
-    //         Ok(())
-    //     },
-    //     "deposit",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/deposit/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/deposit/*/*",
-    // }
+    processing_tests! {
+        process_deposit_data,
+        |config, pubkey_cache, state, deposit, _| {
+            unphased::verify_deposit_merkle_branch(state, state.eth1_deposit_index, deposit)?;
+            // TODO(gloas): use `electra::process_deposit_data`
+            process_deposit_data(config, pubkey_cache, state, deposit.data)?;
+            Ok(())
+        },
+        "deposit",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/deposit/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/deposit/*/*",
+    }
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // processing_tests! {
-    //     process_voluntary_exit,
-    //     |config, pubkey_cache, state, voluntary_exit, _| {
-    //         electra::process_voluntary_exit(
-    //             config,
-    //             pubkey_cache,
-    //             state,
-    //             voluntary_exit,
-    //             SingleVerifier,
-    //         )
-    //     },
-    //     "voluntary_exit",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/voluntary_exit/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/voluntary_exit/*/*",
-    // }
+    processing_tests! {
+        process_voluntary_exit,
+        |config, pubkey_cache, state, voluntary_exit, _| {
+            // TODO(gloas): use `electra::process_voluntary_exit`
+            process_voluntary_exit(
+                config,
+                pubkey_cache,
+                state,
+                voluntary_exit,
+                SingleVerifier,
+            )
+        },
+        "voluntary_exit",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/voluntary_exit/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/voluntary_exit/*/*",
+    }
 
     processing_tests! {
         process_sync_aggregate,
@@ -1346,28 +1645,28 @@ mod spec_tests {
         "consensus-spec-tests/tests/minimal/gloas/operations/attester_slashing/*/*",
     }
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
-    // validation_tests! {
-    //     validate_voluntary_exit,
-    //     |config, pubkey_cache, state, voluntary_exit| {
-    //         electra::validate_voluntary_exit_with_verifier(config, pubkey_cache, state, voluntary_exit, SingleVerifier)
-    //     },
-    //     "voluntary_exit",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/voluntary_exit/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/voluntary_exit/*/*",
-    // }
+    validation_tests! {
+        validate_voluntary_exit,
+        |config, pubkey_cache, state, voluntary_exit| {
+            // TODO(gloas): use `electra::validate_voluntary_exit_with_verifier`
+            validate_voluntary_exit_with_verifier(config, pubkey_cache, state, voluntary_exit, SingleVerifier)
+        },
+        "voluntary_exit",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/voluntary_exit/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/voluntary_exit/*/*",
+    }
 
-    // TODO(gloas): update `state` param to be compatible with GloasBeaconState
     // TODO(feature/electra): comment this & run missing test script
-    // validation_tests! {
-    //     validate_bls_to_execution_change,
-    //     |config, pubkey_cache, state, bls_to_execution_change| {
-    //         capella::validate_bls_to_execution_change(config, pubkey_cache, state, bls_to_execution_change)
-    //     },
-    //     "address_change",
-    //     "consensus-spec-tests/tests/mainnet/gloas/operations/bls_to_execution_change/*/*",
-    //     "consensus-spec-tests/tests/minimal/gloas/operations/bls_to_execution_change/*/*",
-    // }
+    validation_tests! {
+        validate_bls_to_execution_change,
+        |config, pubkey_cache, state, bls_to_execution_change| {
+            // TODO(gloas): use `capella::validate_bls_to_execution_change`
+            validate_bls_to_execution_change(config, pubkey_cache, state, bls_to_execution_change)
+        },
+        "address_change",
+        "consensus-spec-tests/tests/mainnet/gloas/operations/bls_to_execution_change/*/*",
+        "consensus-spec-tests/tests/minimal/gloas/operations/bls_to_execution_change/*/*",
+    }
 
     #[test_resources("consensus-spec-tests/tests/mainnet/gloas/operations/withdrawals/*/*")]
     fn mainnet_withdrawals(case: Case) {
@@ -1479,19 +1778,19 @@ mod spec_tests {
         apply_attestation(config, state, attestation, NullSlotReport)
     }
 
-    // TODO(gloas): uncomment after `state` param is compatible with GloasBeaconState
-    // fn process_deposit<P: Preset>(
-    //     config: &Config,
-    //     pubkey_cache: &PubkeyCache,
-    //     state: &mut BeaconState<P>,
-    //     deposit: Deposit,
-    // ) -> Result<()> {
-    //     let combined_deposits =
-    //         unphased::validate_deposits(config, pubkey_cache, state, core::iter::once(deposit))?;
-    //
-    //     // > Deposits must be processed in order
-    //     *state.eth1_deposit_index_mut() += 1;
-    //
-    //     electra::apply_deposits(state, combined_deposits, NullSlotReport)
-    // }
+    fn process_deposit<P: Preset>(
+        config: &Config,
+        pubkey_cache: &PubkeyCache,
+        state: &mut GloasBeaconState<P>,
+        deposit: Deposit,
+    ) -> Result<()> {
+        let combined_deposits =
+            unphased::validate_deposits(config, pubkey_cache, state, core::iter::once(deposit))?;
+
+        // > Deposits must be processed in order
+        *state.eth1_deposit_index_mut() += 1;
+
+        // TODO(gloas): use `electra::apply_deposits`
+        apply_deposits(state, combined_deposits, NullSlotReport)
+    }
 }

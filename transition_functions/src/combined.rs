@@ -958,7 +958,7 @@ pub fn process_deposit_data(
         }
         // TODO: (gloas): change to `electra::process_deposit_data(config, pubkey_cache, state, deposit_data)`
         BeaconState::Gloas(state) => {
-            altair::process_deposit_data(config, pubkey_cache, state, deposit_data)
+            gloas::process_deposit_data(config, pubkey_cache, state, deposit_data)
         }
     }
 }

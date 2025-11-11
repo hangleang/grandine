@@ -1015,7 +1015,7 @@ fn get_pending_balance_to_withdraw_pre_gloas<P: Preset>(
 }
 
 #[must_use]
-fn get_pending_balance_to_withdraw_post_gloas<P: Preset>(
+pub fn get_pending_balance_to_withdraw_post_gloas<P: Preset>(
     state: &(impl PostGloasBeaconState<P> + ?Sized),
     validator_index: ValidatorIndex,
 ) -> Gwei {
