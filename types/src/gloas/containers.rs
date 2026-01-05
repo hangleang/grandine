@@ -1,4 +1,4 @@
-use bls::SignatureBytes;
+use bls::{PublicKeyBytes, SignatureBytes};
 use serde::{Deserialize, Serialize};
 use ssz::{BitVector, ContiguousList, ContiguousVector, Ssz};
 use typenum::Log2;
@@ -16,7 +16,7 @@ use crate::{
         containers::{Attestation, AttesterSlashing, ExecutionRequests},
     },
     fulu::primitives::{Cell, ColumnIndex},
-    gloas::primitives::PayloadStatus,
+    gloas::primitives::{BuilderIndex, PayloadStatus},
     phase0::{
         containers::{BeaconBlockHeader, Deposit, Eth1Data, ProposerSlashing, SignedVoluntaryExit},
         primitives::{
@@ -56,6 +56,21 @@ pub struct BeaconBlockBody<P: Preset> {
     pub payload_attestations: ContiguousList<PayloadAttestation<P>, P::MaxPayloadAttestation>,
 }
 
+#[derive(Clone, PartialEq, Eq, Debug, Default, Deserialize, Serialize, Ssz)]
+#[serde(deny_unknown_fields)]
+pub struct Builder {
+    pub pubkey: PublicKeyBytes,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub version: u8,
+    pub execution_address: ExecutionAddress,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub balance: Gwei,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub deposit_epoch: Epoch,
+    #[serde(with = "serde_utils::string_or_native")]
+    pub withdrawable_epoch: Epoch,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Deserialize, Serialize, Ssz)]
 #[serde(bound = "", deny_unknown_fields)]
 pub struct BuilderPendingPayment {
@@ -71,9 +86,7 @@ pub struct BuilderPendingWithdrawal {
     #[serde(with = "serde_utils::string_or_native")]
     pub amount: Gwei,
     #[serde(with = "serde_utils::string_or_native")]
-    pub builder_index: ValidatorIndex,
-    #[serde(with = "serde_utils::string_or_native")]
-    pub withdrawable_epoch: Epoch,
+    pub builder_index: BuilderIndex,
 }
 
 #[derive(Clone, PartialEq, Eq, Default, Deserialize, Serialize, Ssz)]
@@ -100,7 +113,7 @@ pub struct ExecutionPayloadBid {
     #[serde(with = "serde_utils::string_or_native")]
     pub gas_limit: Gas,
     #[serde(with = "serde_utils::string_or_native")]
-    pub builder_index: ValidatorIndex,
+    pub builder_index: BuilderIndex,
     #[serde(with = "serde_utils::string_or_native")]
     pub slot: Slot,
     #[serde(with = "serde_utils::string_or_native")]
@@ -116,7 +129,7 @@ pub struct ExecutionPayloadEnvelope<P: Preset> {
     pub payload: ExecutionPayload<P>,
     pub execution_requests: ExecutionRequests<P>,
     #[serde(with = "serde_utils::string_or_native")]
-    pub builder_index: ValidatorIndex,
+    pub builder_index: BuilderIndex,
     pub beacon_block_root: H256,
     #[serde(with = "serde_utils::string_or_native")]
     pub slot: Slot,

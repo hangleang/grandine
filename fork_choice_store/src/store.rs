@@ -1327,27 +1327,24 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             return Ok(ExecutionPayloadBidAction::Ignore(true));
         };
 
-        // > the builder is active, and non-slashed builder.
+        // > the `bid.builder_index` is a valid/active builder index
         let current_epoch = accessors::get_current_epoch(&state);
-        let builder = state.validators().get(builder_index)?;
-        ensure!(
-            !builder.slashed,
-            Error::<P>::ExecutionPayloadBidBuilderSlashed { payload_bid }
-        );
-        ensure!(
-            predicates::is_active_validator(builder, current_epoch),
-            Error::<P>::ExecutionPayloadBidBuilderInactive { payload_bid }
-        );
 
-        // > the builder's withdrawal credentials' prefix is BUILDER_WITHDRAWAL_PREFIX
+        let Some(post_gloas_state) = state.post_gloas() else {
+            return Ok(ExecutionPayloadBidAction::Ignore(true));
+        };
+        let builder = post_gloas_state.builders().get(builder_index)?;
+
         ensure!(
-            predicates::has_builder_withdrawal_credential(builder),
-            Error::<P>::ExecutionPayloadBidBuilderInvalid { payload_bid }
+            predicates::is_active_builder(builder, state.finalized_checkpoint().epoch),
+            Error::<P>::ExecutionPayloadBidBuilderInactive {
+                payload_bid,
+                epoch: current_epoch
+            }
         );
 
         // > the `bid.value` is less or equal than the builder's excess balance
-        let builder_balance = *state.balances().get(builder_index)?;
-        if bid.value + P::MIN_ACTIVATION_BALANCE > builder_balance {
+        if !predicates::can_builder_cover_bid(post_gloas_state, builder_index, bid.value)? {
             return Ok(ExecutionPayloadBidAction::Ignore(false));
         }
 

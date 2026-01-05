@@ -5,7 +5,10 @@ use std::{
 };
 
 use anyhow::{Context as _, Error as AnyhowError, Result};
-use bls::{traits::Signature as _, AggregateSignature, PublicKeyBytes, SignatureBytes};
+use bls::{
+    traits::{Signature as _, SignatureBytes as _},
+    AggregateSignature, PublicKeyBytes, SignatureBytes,
+};
 use builder_api::{combined::SignedBuilderBid, BuilderApi};
 use cached::{Cached as _, SizedCache};
 use dedicated_executor::{DedicatedExecutor, Job};
@@ -76,10 +79,13 @@ use types::{
         ExecutionRequests,
     },
     fulu::containers::{BeaconBlock as FuluBeaconBlock, BeaconBlockBody as FuluBeaconBlockBody},
-    gloas::containers::{
-        BeaconBlock as GloasBeaconBlock, BeaconBlockBody as GloasBeaconBlockBody,
-        ExecutionPayloadBid, ExecutionPayloadEnvelope, PayloadAttestation,
-        SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+    gloas::{
+        consts::BUILDER_INDEX_SELF_BUILD,
+        containers::{
+            BeaconBlock as GloasBeaconBlock, BeaconBlockBody as GloasBeaconBlockBody,
+            ExecutionPayloadBid, ExecutionPayloadEnvelope, PayloadAttestation,
+            SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+        },
     },
     nonstandard::{BlockRewards, Phase, WithBlobsAndMev, WEI_IN_GWEI},
     phase0::{
@@ -483,7 +489,7 @@ impl<P: Preset, W: Wait> BlockProducer<P, W> {
                 state,
                 exit,
             ),
-            BeaconState::Gloas(state) => electra::validate_voluntary_exit(
+            BeaconState::Gloas(state) => gloas::validate_voluntary_exit(
                 &self.producer_context.chain_config,
                 &self.producer_context.pubkey_cache,
                 state,
@@ -1149,6 +1155,7 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
     ) -> Result<Option<(WithBlobsAndMev<BeaconBlock<P>, P>, Option<BlockRewards>)>> {
         // Proposer have to call `engine_getPayload` only if they are also a builder
         // for post-Gloas
+        // TODO(gloas): consider enable self-build via validator config
         let can_self_build = !self.beacon_state.is_post_gloas()
             || predicates::has_builder_withdrawal_credential(self.proposer()?);
 
@@ -1455,6 +1462,8 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
         let mut exits = self.producer_context.voluntary_exits.lock().await;
 
         let split_index = itertools::partition(exits.iter_mut(), |voluntary_exit| {
+            // TODO(gloas): Do we need to include builder exit requests in beacon block?
+            // Remove this TODO if not
             unphased::validate_voluntary_exit(
                 &self.producer_context.chain_config,
                 &self.producer_context.pubkey_cache,
@@ -1584,6 +1593,10 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
             return Ok(None);
         };
 
+        let blob_kzg_commitments_root = blob_kzg_commitments_opt
+            .map(|commitments| commitments.hash_tree_root())
+            .unwrap_or(H256::zero());
+
         let fee_recipient = self.fee_recipient().await?;
 
         let payload_bid = ExecutionPayloadBid {
@@ -1593,18 +1606,16 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
             prev_randao: payload.prev_randao(),
             fee_recipient,
             gas_limit: payload.gas_limit(),
-            builder_index: self.proposer_index,
+            builder_index: BUILDER_INDEX_SELF_BUILD,
             slot: state.slot(),
             value: 0,
             execution_payment: 0,
-            blob_kzg_commitments_root: blob_kzg_commitments_opt
-                .map(|commitments| commitments.hash_tree_root())
-                .unwrap_or(H256::zero()),
+            blob_kzg_commitments_root,
         };
 
         Ok(Some(SignedExecutionPayloadBid {
             message: payload_bid,
-            signature: SignatureBytes::zero(),
+            signature: SignatureBytes::empty(),
         }))
     }
 
@@ -1701,7 +1712,7 @@ impl<P: Preset, W: Wait> BlockBuildContext<P, W> {
                 })
             }
             BeaconState::Gloas(state) => {
-                let (withdrawals, _, _) = gloas::get_expected_withdrawals(state)?;
+                let (withdrawals, _, _, _) = gloas::get_expected_withdrawals(state)?;
 
                 let withdrawals = withdrawals
                     .into_iter()

@@ -10,7 +10,7 @@ use types::{
     gloas::containers::{
         PayloadAttestationMessage, SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
     },
-    phase0::primitives::{Slot, SubnetId, ValidatorIndex, H256},
+    phase0::primitives::{Epoch, Slot, SubnetId, ValidatorIndex, H256},
     preset::{Mainnet, Preset},
 };
 
@@ -140,13 +140,10 @@ pub enum Error<P: Preset> {
         data_column_sidecar: Arc<DataColumnSidecar<P>>,
         computed: ValidatorIndex,
     },
-    #[error("execution payload bid's builder is not active: {payload_bid:?}")]
+    #[error("execution payload bid's builder is not active at epoch {epoch}: {payload_bid:?}")]
     ExecutionPayloadBidBuilderInactive {
         payload_bid: Arc<SignedExecutionPayloadBid>,
-    },
-    #[error("execution payload bid's builder has been slashed: {payload_bid:?}")]
-    ExecutionPayloadBidBuilderSlashed {
-        payload_bid: Arc<SignedExecutionPayloadBid>,
+        epoch: Epoch,
     },
     #[error("execution payload bid's builder has invalid withdrawal credentials: {payload_bid:?}")]
     ExecutionPayloadBidBuilderInvalid {
