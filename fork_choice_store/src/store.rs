@@ -413,11 +413,11 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
     #[must_use]
     pub fn accepted_payload_bid_at_slot(&self, slot: Slot) -> Option<SignedExecutionPayloadBid> {
         Some(
-            self.accepted_payload_bids
+            *self
+                .accepted_payload_bids
                 .get(&slot)?
                 .values()
-                .max_by_key(|bid| bid.message.value)?
-                .clone(),
+                .max_by_key(|bid| bid.message.value)?,
         )
     }
 
@@ -2721,7 +2721,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         ensure!(
             envelope.message.payload.block_hash == bid.block_hash,
             Error::<P>::ExecutionPayloadBlockHashMismatch {
-                envelope: envelope.clone(),
+                envelope,
                 expected: Box::new(bid.block_hash),
             },
         );
@@ -3178,11 +3178,11 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         self.blob_cache.insert(blob_sidecar);
     }
 
-    pub fn apply_execution_payload_bid(&mut self, payload_bid: Arc<SignedExecutionPayloadBid>) {
+    pub fn apply_execution_payload_bid(&mut self, payload_bid: &Arc<SignedExecutionPayloadBid>) {
         let bid = payload_bid.message;
         let accepted_bids = self.accepted_payload_bids.entry(bid.slot).or_default();
 
-        accepted_bids.insert(bid.builder_index, *payload_bid);
+        accepted_bids.insert(bid.builder_index, **payload_bid);
     }
 
     pub fn apply_data_column_sidecar(&mut self, data_sidecar: Arc<DataColumnSidecar<P>>) {

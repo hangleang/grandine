@@ -589,7 +589,6 @@ impl<P: Preset, W> Run for PayloadAttestationTask<P, W> {
 pub struct ExecutionPayloadBidTask<P: Preset, W> {
     pub store_snapshot: Arc<Store<P, Storage<P>>>,
     pub mutator_tx: Sender<MutatorMessage<P, W>>,
-    pub wait_group: W,
     pub payload_bid: Arc<SignedExecutionPayloadBid>,
     pub origin: ExecutionPayloadBidOrigin,
 }
@@ -599,19 +598,13 @@ impl<P: Preset, W> Run for ExecutionPayloadBidTask<P, W> {
         let Self {
             store_snapshot,
             mutator_tx,
-            wait_group,
             payload_bid,
             origin,
         } = self;
 
         let result = store_snapshot.validate_execution_payload_bid(payload_bid, &origin);
 
-        MutatorMessage::PayloadBid {
-            wait_group,
-            result,
-            origin,
-        }
-        .send(&mutator_tx);
+        MutatorMessage::PayloadBid { result, origin }.send(&mutator_tx);
     }
 }
 

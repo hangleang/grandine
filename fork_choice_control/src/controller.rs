@@ -880,7 +880,6 @@ where
         self.spawn(ExecutionPayloadBidTask {
             store_snapshot: self.owned_store_snapshot(),
             mutator_tx: self.owned_mutator_tx(),
-            wait_group: self.owned_wait_group(),
             payload_bid,
             origin,
         })

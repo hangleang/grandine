@@ -35,9 +35,11 @@ use tokio::select;
 use tokio_stream::wrappers::IntervalStream;
 use try_from_iterator::TryFromIterator as _;
 use types::{
+    combined::DataColumnSidecar,
     config::Config,
-    deneb::containers::BlobIdentifier,
+    deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::containers::{DataColumnIdentifier, DataColumnsByRootIdentifier},
+    gloas::containers::SignedExecutionPayloadEnvelope,
     phase0::{
         consts::GENESIS_SLOT,
         primitives::{Slot, ValidatorIndex, H256},
@@ -368,42 +370,7 @@ impl<P: Preset> BlockSyncService<P> {
                             );
                         }
                         P2pToSync::RequestedBlobSidecar(blob_sidecar, peer_id, request_id, request_type) => {
-                            let blob_identifier = blob_sidecar.as_ref().into();
-
-                            self.sync_manager.record_received_blob_sidecar_response(blob_identifier, peer_id, request_id);
-
-                            // Back sync does not issue BlobSidecarsByRoot requests
-                            let request_direction = match request_type {
-                                RPCRequestType::Root => SyncDirection::Forward,
-                                RPCRequestType::Range => self
-                                    .sync_manager
-                                    .request_direction(request_id)
-                                    .unwrap_or(self.sync_direction),
-                            };
-
-                            match request_direction {
-                                SyncDirection::Forward => {
-                                    let blob_sidecar_slot = blob_sidecar.signed_block_header.message.slot;
-
-                                    if !self.controller.contains_block(blob_identifier.block_root)
-                                        && self.register_new_received_blob_sidecar(blob_identifier, blob_sidecar_slot)
-                                    {
-                                        self.data_dumper.dump_blob_sidecar(blob_sidecar.clone_arc());
-
-                                        let block_seen = self
-                                            .received_block_roots
-                                            .contains_key(&blob_identifier.block_root);
-
-                                        self.controller
-                                            .on_requested_blob_sidecar(blob_sidecar, block_seen, peer_id);
-                                    }
-                                }
-                                SyncDirection::Back => {
-                                    if let Some(back_sync) = self.back_sync.as_mut() {
-                                        back_sync.push_blob_sidecar(blob_sidecar);
-                                    }
-                                }
-                            }
+                            self.handle_blob_sidecar_response(blob_sidecar, peer_id, request_id, &request_type);
                         }
                         P2pToSync::GossipBlock(beacon_block, peer_id, gossip_id) => {
                             let block_root = beacon_block.message().hash_tree_root();
@@ -480,53 +447,7 @@ impl<P: Preset> BlockSyncService<P> {
                             );
                         }
                         P2pToSync::RequestedDataColumnSidecar(data_column_sidecar, peer_id, request_id, request_type) => {
-                            let data_column_identifier = data_column_sidecar.as_ref().into();
-
-                            self.sync_manager.record_received_data_column_sidecar_response(
-                                data_column_identifier,
-                                peer_id,
-                                request_id
-                            );
-
-                            // Back sync does not issue DataColumnSidecarsByRoot requests
-                            let request_direction = match request_type {
-                                RPCRequestType::Root => SyncDirection::Forward,
-                                RPCRequestType::Range => self
-                                    .sync_manager
-                                    .request_direction(request_id)
-                                    .unwrap_or(self.sync_direction),
-                            };
-
-                            match request_direction {
-                                SyncDirection::Forward => {
-                                    let data_column_sidecar_slot = data_column_sidecar.slot();
-
-                                    // TODO: (gloas): gloas block can be imported without the
-                                    // sidecars, this should change to `contains_block_and_sidecars`
-                                    if !self.controller.contains_block(data_column_identifier.block_root)
-                                        && self.register_new_received_data_column_sidecar(
-                                            data_column_identifier,
-                                            data_column_sidecar_slot,
-                                        )
-                                    {
-                                        let block_seen = self
-                                            .received_block_roots
-                                            .contains_key(&data_column_identifier.block_root);
-
-                                        self.controller.on_requested_data_column_sidecar(data_column_sidecar, block_seen, peer_id);
-                                    } else {
-                                        debug_with_peers!(
-                                            "received known data column sidecar: {data_column_identifier:?}, \
-                                            slot: {data_column_sidecar_slot}, request_id: {request_id:?}"
-                                        );
-                                    }
-                                }
-                                SyncDirection::Back => {
-                                    if let Some(back_sync) = self.back_sync.as_mut() {
-                                        back_sync.push_data_column_sidecar(data_column_sidecar);
-                                    }
-                                }
-                            }
+                            self.handle_data_column_sidecar_response(data_column_sidecar, peer_id, request_id, &request_type);
                         }
                         P2pToSync::BlobsByRangeRequestFinished(request_id) => {
                             let request_direction = self.sync_manager.request_direction(request_id);
@@ -567,46 +488,7 @@ impl<P: Preset> BlockSyncService<P> {
                             self.request_blobs_and_blocks_if_ready();
                         }
                         P2pToSync::RequestedExecutionPayloadEnvelope(envelope, peer_id, request_id, request_type) => {
-                            let block_root = envelope.message.beacon_block_root;
-
-                            self.sync_manager.record_received_execution_payload_envelope_response(
-                                block_root,
-                                peer_id,
-                                request_id,
-                            );
-
-                            let request_direction = match request_type {
-                                RPCRequestType::Root => SyncDirection::Forward,
-                                RPCRequestType::Range => self
-                                    .sync_manager
-                                    .request_direction(request_id)
-                                    .unwrap_or(self.sync_direction),
-                            };
-
-                            match request_direction {
-                                SyncDirection::Forward => {
-                                    let envelope_slot = envelope.message.slot;
-                                    let builder_index = envelope.message.builder_index;
-
-                                    if self.register_new_received_envelope(block_root, builder_index, envelope_slot) {
-                                        self.controller.on_requested_execution_payload_envelope(envelope, peer_id);
-
-                                        debug_with_peers!(
-                                            "received execution payload envelope (block_root: {block_root:?}, \
-                                             slot: {envelope_slot}, peer_id: {peer_id}, request_id: {request_id:?})"
-                                        );
-                                    }
-                                }
-                                SyncDirection::Back => {
-                                    if let Some(back_sync) = self.back_sync.as_mut() {
-                                        back_sync.push_execution_payload_envelope(envelope);
-                                        debug_with_peers!(
-                                            "received execution payload envelope for back sync (block_root: {block_root:?}, \
-                                             peer_id: {peer_id})"
-                                        );
-                                    }
-                                }
-                            }
+                            self.handle_execution_payload_envelope_response(envelope, peer_id, request_id, &request_type);
                         }
                         P2pToSync::ExecutionPayloadEnvelopesByRangeRequestFinished(peer_id, request_id) => {
                             let request_direction = self.sync_manager.request_direction(request_id);
@@ -697,6 +579,164 @@ impl<P: Preset> BlockSyncService<P> {
         }
 
         Ok(())
+    }
+
+    fn handle_blob_sidecar_response(
+        &mut self,
+        blob_sidecar: Arc<BlobSidecar<P>>,
+        peer_id: PeerId,
+        request_id: AppRequestId,
+        request_type: &RPCRequestType,
+    ) {
+        let blob_identifier = blob_sidecar.as_ref().into();
+
+        self.sync_manager.record_received_blob_sidecar_response(
+            blob_identifier,
+            peer_id,
+            request_id,
+        );
+
+        // Back sync does not issue BlobSidecarsByRoot requests
+        let request_direction = match request_type {
+            RPCRequestType::Root => SyncDirection::Forward,
+            RPCRequestType::Range => self
+                .sync_manager
+                .request_direction(request_id)
+                .unwrap_or(self.sync_direction),
+        };
+
+        match request_direction {
+            SyncDirection::Forward => {
+                let blob_sidecar_slot = blob_sidecar.signed_block_header.message.slot;
+
+                if !self.controller.contains_block(blob_identifier.block_root)
+                    && self.register_new_received_blob_sidecar(blob_identifier, blob_sidecar_slot)
+                {
+                    self.data_dumper.dump_blob_sidecar(blob_sidecar.clone_arc());
+
+                    let block_seen = self
+                        .received_block_roots
+                        .contains_key(&blob_identifier.block_root);
+
+                    self.controller
+                        .on_requested_blob_sidecar(blob_sidecar, block_seen, peer_id);
+                }
+            }
+            SyncDirection::Back => {
+                if let Some(back_sync) = self.back_sync.as_mut() {
+                    back_sync.push_blob_sidecar(blob_sidecar);
+                }
+            }
+        }
+    }
+
+    fn handle_data_column_sidecar_response(
+        &mut self,
+        data_column_sidecar: Arc<DataColumnSidecar<P>>,
+        peer_id: PeerId,
+        request_id: AppRequestId,
+        request_type: &RPCRequestType,
+    ) {
+        let data_column_identifier = data_column_sidecar.as_ref().into();
+
+        self.sync_manager
+            .record_received_data_column_sidecar_response(
+                data_column_identifier,
+                peer_id,
+                request_id,
+            );
+
+        // Back sync does not issue DataColumnSidecarsByRoot requests
+        let request_direction = match request_type {
+            RPCRequestType::Root => SyncDirection::Forward,
+            RPCRequestType::Range => self
+                .sync_manager
+                .request_direction(request_id)
+                .unwrap_or(self.sync_direction),
+        };
+
+        match request_direction {
+            SyncDirection::Forward => {
+                let data_column_sidecar_slot = data_column_sidecar.slot();
+
+                // TODO: (gloas): gloas block can be imported without the
+                // sidecars, this should change to `contains_block_and_sidecars`
+                if !self
+                    .controller
+                    .contains_block(data_column_identifier.block_root)
+                    && self.register_new_received_data_column_sidecar(
+                        data_column_identifier,
+                        data_column_sidecar_slot,
+                    )
+                {
+                    let block_seen = self
+                        .received_block_roots
+                        .contains_key(&data_column_identifier.block_root);
+
+                    self.controller.on_requested_data_column_sidecar(
+                        data_column_sidecar,
+                        block_seen,
+                        peer_id,
+                    );
+                } else {
+                    debug_with_peers!(
+                        "received known data column sidecar: {data_column_identifier:?}, \
+                        slot: {data_column_sidecar_slot}, request_id: {request_id:?}"
+                    );
+                }
+            }
+            SyncDirection::Back => {
+                if let Some(back_sync) = self.back_sync.as_mut() {
+                    back_sync.push_data_column_sidecar(data_column_sidecar);
+                }
+            }
+        }
+    }
+
+    fn handle_execution_payload_envelope_response(
+        &mut self,
+        envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        peer_id: PeerId,
+        request_id: AppRequestId,
+        request_type: &RPCRequestType,
+    ) {
+        let block_root = envelope.message.beacon_block_root;
+
+        self.sync_manager
+            .record_received_execution_payload_envelope_response(block_root, peer_id, request_id);
+
+        let request_direction = match request_type {
+            RPCRequestType::Root => SyncDirection::Forward,
+            RPCRequestType::Range => self
+                .sync_manager
+                .request_direction(request_id)
+                .unwrap_or(self.sync_direction),
+        };
+
+        match request_direction {
+            SyncDirection::Forward => {
+                let envelope_slot = envelope.message.slot;
+                let builder_index = envelope.message.builder_index;
+
+                if self.register_new_received_envelope(block_root, builder_index, envelope_slot) {
+                    self.controller
+                        .on_requested_execution_payload_envelope(envelope, peer_id);
+
+                    debug_with_peers!(
+                        "received execution payload envelope (block_root: {block_root:?}, \
+                         slot: {envelope_slot}, peer_id: {peer_id}, request_id: {request_id:?})"
+                    );
+                }
+            }
+            SyncDirection::Back => {
+                if let Some(back_sync) = self.back_sync.as_mut() {
+                    back_sync.push_execution_payload_envelope(envelope);
+                    debug_with_peers!(
+                        "received execution payload envelope for back sync (block_root: {block_root:?}, peer_id: {peer_id})"
+                    );
+                }
+            }
+        }
     }
 
     pub fn check_back_sync_progress(&mut self) -> Result<()> {

@@ -310,7 +310,7 @@ impl<P: Preset> EventChannels<P> {
 
     pub fn send_payload_attestation_event(
         &self,
-        payload_attestation: Arc<PayloadAttestationMessage>,
+        payload_attestation: &Arc<PayloadAttestationMessage>,
     ) {
         if let Err(error) = self.send_payload_attestation_event_internal(payload_attestation) {
             warn_with_peers!("unable to send payload attestation event: {error}");
@@ -541,10 +541,13 @@ impl<P: Preset> EventChannels<P> {
 
     fn send_payload_attestation_event_internal(
         &self,
-        payload_attestation: Arc<PayloadAttestationMessage>,
+        payload_attestation: &Arc<PayloadAttestationMessage>,
     ) -> Result<()> {
         if self.payload_attestations.receiver_count() > 0 {
-            let payload_attestation_event = PayloadAttestationEvent::new(payload_attestation);
+            let payload_attestation_event = PayloadAttestationEvent {
+                validator_index: payload_attestation.validator_index,
+                data: payload_attestation.data,
+            };
             let event = Event::PayloadAttestation(payload_attestation_event);
             self.payload_attestations.send(event)?;
         }
@@ -742,7 +745,7 @@ pub struct ExecutionPayloadBidEvent {
 }
 
 impl ExecutionPayloadBidEvent {
-    fn new(payload_bid: ExecutionPayloadBid) -> Self {
+    const fn new(payload_bid: ExecutionPayloadBid) -> Self {
         Self {
             slot: payload_bid.slot,
             builder_index: payload_bid.builder_index,
@@ -801,15 +804,6 @@ pub struct PayloadAttestationEvent {
     pub validator_index: ValidatorIndex,
     #[serde(flatten)]
     pub data: PayloadAttestationData,
-}
-
-impl PayloadAttestationEvent {
-    fn new(payload_attestation: Arc<PayloadAttestationMessage>) -> Self {
-        Self {
-            validator_index: payload_attestation.validator_index,
-            data: payload_attestation.data,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]

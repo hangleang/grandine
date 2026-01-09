@@ -1174,6 +1174,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
     /// Create and sign Gloas execution payload envelope for self-build proposers.
     /// Returns None if envelope data is not available (i.e., not self-building).
+    #[expect(clippy::too_many_arguments)]
     async fn publish_execution_payload_envelope(
         &self,
         wait_group: &W,
@@ -1654,9 +1655,8 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     #[instrument(level = "debug", skip_all)]
-    async fn attest_payload(&mut self, wait_group: &W, slot_head: &SlotHead<P>) -> Result<()> {
+    async fn attest_payload(&self, wait_group: &W, slot_head: &SlotHead<P>) -> Result<()> {
         if self.wait_for_fully_validated_head(slot_head).await.is_err() {
             warn_with_peers!(
                 "validator cannot participate in payload attestation because \
@@ -1678,7 +1678,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             .is_none()
         {
             return Ok(());
-        };
+        }
 
         let _timer = self
             .metrics
@@ -1716,7 +1716,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         );
 
         for own_payload_attestation in own_payload_attestations {
-            let payload_attestation = Arc::new(own_payload_attestation.clone());
+            let payload_attestation = Arc::new(*own_payload_attestation);
 
             ValidatorToP2p::PublishPayloadAttestation(payload_attestation.clone_arc())
                 .send(&self.p2p_tx);

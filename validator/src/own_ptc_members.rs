@@ -64,10 +64,7 @@ impl OwnPTCMembers {
         let slot_index = slot_index_from_slot(slot);
         let mut slot_members_opt = self.slots[slot_index].lock().await;
 
-        *slot_members_opt = match self
-            .compute_members_at_slot(state, slot, own_public_keys)
-            .await
-        {
+        *slot_members_opt = match Self::compute_members_at_slot(state, slot, own_public_keys) {
             Ok(members) => members.map(|members| PTCMembers { slot, members }),
             Err(error) => {
                 warn_with_peers!("failed to compute own ptc members at slot {slot}: {error:?}");
@@ -92,8 +89,7 @@ impl OwnPTCMembers {
         current_slot..current_slot + ComputeInAdvanceSlots::U64
     }
 
-    async fn compute_members_at_slot<P: Preset>(
-        &self,
+    fn compute_members_at_slot<P: Preset>(
         state: &BeaconState<P>,
         slot: Slot,
         own_public_keys: &HashSet<PublicKeyBytes>,
@@ -105,7 +101,7 @@ impl OwnPTCMembers {
         let own_validator_indices = own_public_keys
             .iter()
             .filter_map(|public_key| {
-                let validator_index = accessors::index_of_public_key(state, &public_key)?;
+                let validator_index = accessors::index_of_public_key(state, public_key)?;
                 Some((validator_index, public_key))
             })
             .collect::<HashMap<_, _>>();

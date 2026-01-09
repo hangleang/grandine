@@ -1279,7 +1279,6 @@ pub async fn blob_sidecars<P: Preset, W: Wait>(
 
         let blobs = construct_blobs_from_data_column_sidecars(
             controller.clone_arc(),
-            block.clone_arc(),
             block_root,
             metrics.as_ref(),
         )
@@ -1374,7 +1373,6 @@ pub async fn blobs<P: Preset, W: Wait>(
     let blobs = if version.is_peerdas_activated() {
         let blobs = construct_blobs_from_data_column_sidecars(
             controller.clone_arc(),
-            block,
             block_root,
             metrics.as_ref(),
         )
@@ -4299,7 +4297,6 @@ async fn wait_for_missing_blocks_with_timeout<P: Preset, W: Wait>(
 
 async fn construct_blobs_from_data_column_sidecars<P: Preset, W: Wait>(
     controller: ApiController<P, W>,
-    block: Arc<SignedBeaconBlock<P>>,
     block_root: H256,
     metrics: Option<&Arc<Metrics>>,
 ) -> Result<Vec<Blob<P>>> {

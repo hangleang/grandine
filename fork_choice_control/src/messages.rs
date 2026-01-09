@@ -167,7 +167,6 @@ pub enum MutatorMessage<P: Preset, W> {
         origin: PayloadAttestationOrigin,
     },
     PayloadBid {
-        wait_group: W,
         result: Result<ExecutionPayloadBidAction>,
         origin: ExecutionPayloadBidOrigin,
     },

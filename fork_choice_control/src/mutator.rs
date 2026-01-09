@@ -328,17 +328,15 @@ where
                     result,
                     origin,
                     submission_time,
-                )?,
+                ),
                 MutatorMessage::PayloadAttestation {
                     wait_group,
                     result,
                     origin,
-                } => self.handle_payload_attestation(&wait_group, result, origin)?,
-                MutatorMessage::PayloadBid {
-                    wait_group,
-                    result,
-                    origin,
-                } => self.handle_payload_bid(&wait_group, result, origin),
+                } => self.handle_payload_attestation(&wait_group, result, origin),
+                MutatorMessage::PayloadBid { result, origin } => {
+                    self.handle_payload_bid(result, origin)
+                }
                 MutatorMessage::PreprocessedBeaconState { state } => {
                     self.prepare_execution_payload_for_next_slot(&state);
                 }
@@ -1800,7 +1798,7 @@ where
         result: Result<ExecutionPayloadEnvelopeAction<P>>,
         origin: ExecutionPayloadEnvelopeOrigin,
         submission_time: Instant,
-    ) -> Result<()> {
+    ) {
         match result {
             Ok(ExecutionPayloadEnvelopeAction::Accept(execution_payload_envelope)) => {
                 if let Some(metrics) = self.metrics.as_ref() {
@@ -1949,17 +1947,14 @@ where
                 reply_to_http_api(sender, Err(anyhow!(source)));
             }
         }
-
-        Ok(())
     }
 
-    #[expect(clippy::too_many_lines)]
     fn handle_payload_attestation(
         &mut self,
         wait_group: &W,
         result: Result<PayloadAttestationAction>,
         origin: PayloadAttestationOrigin,
-    ) -> Result<()> {
+    ) {
         match result {
             Ok(PayloadAttestationAction::Accept(payload_attestation)) => {
                 if let Some(metrics) = self.metrics.as_ref() {
@@ -1972,7 +1967,7 @@ where
 
                 if origin.should_generate_event() {
                     self.event_channels
-                        .send_payload_attestation_event(payload_attestation.clone_arc());
+                        .send_payload_attestation_event(&payload_attestation);
                 }
 
                 if origin.send_to_validator() {
@@ -2054,14 +2049,10 @@ where
                 reply_to_http_api(sender, Err(anyhow!(source)));
             }
         }
-
-        Ok(())
     }
 
-    #[expect(clippy::too_many_lines)]
     fn handle_payload_bid(
         &mut self,
-        wait_group: &W,
         result: Result<ExecutionPayloadBidAction>,
         origin: ExecutionPayloadBidOrigin,
     ) {
@@ -2080,7 +2071,7 @@ where
 
                 reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
 
-                self.store_mut().apply_execution_payload_bid(payload_bid);
+                self.store_mut().apply_execution_payload_bid(&payload_bid);
 
                 self.update_store_snapshot();
             }
@@ -3955,6 +3946,7 @@ where
         Ok(())
     }
 
+    #[expect(clippy::cognitive_complexity)]
     fn prune_old_records(&self) -> Result<()> {
         if self.storage.archive_storage_enabled() {
             return Ok(());
