@@ -130,6 +130,13 @@ pub enum SyncCommitteeEpoch {
     Next,
 }
 
+#[derive(Clone, Copy, Debug, Enum)]
+pub enum RelativeSlot {
+    Previous,
+    Current,
+    Next,
+}
+
 #[derive(Debug, Enum)]
 pub enum SlashingKind {
     Proposer,

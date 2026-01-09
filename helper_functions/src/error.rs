@@ -55,6 +55,10 @@ pub(crate) enum Error {
     PermutatedPrefixMaximumOverflow,
     #[error("{0} is invalid")]
     SignatureInvalid(SignatureKind),
+    #[error("slot is after next one relative to state")]
+    SlotAfterNext,
+    #[error("slot is before previous one relative to state")]
+    SlotBeforePrevious,
     #[error("slot is out of range")]
     SlotOutOfRange,
     #[error("subnet ID overflowed")]

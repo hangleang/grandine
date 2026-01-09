@@ -119,7 +119,7 @@ impl OwnPTCMembers {
                     .copied()
                     .map(|public_key| PTCMember {
                         public_key: *public_key,
-                        validator_index,
+                        validator_index: *validator_index,
                         position_in_committee,
                     })
             })

@@ -40,7 +40,7 @@ use types::{
         },
         containers::{IndexedPayloadAttestation, PayloadAttestation},
     },
-    nonstandard::{AttestationEpoch, Participation, RelativeEpoch},
+    nonstandard::{AttestationEpoch, Participation, RelativeEpoch, RelativeSlot},
     phase0::{
         consts::{DOMAIN_BEACON_ATTESTER, DOMAIN_BEACON_PROPOSER},
         containers::AttestationData,
@@ -76,6 +76,11 @@ pub fn get_next_epoch<P: Preset>(state: &(impl BeaconState<P> + ?Sized)) -> Epoc
 }
 
 #[must_use]
+pub fn get_next_slot<P: Preset>(state: &impl BeaconState<P>) -> Slot {
+    state.slot() + 1
+}
+
+#[must_use]
 pub fn absolute_epoch<P: Preset>(
     state: &impl BeaconState<P>,
     relative_epoch: RelativeEpoch,
@@ -84,6 +89,15 @@ pub fn absolute_epoch<P: Preset>(
         RelativeEpoch::Previous => get_previous_epoch(state),
         RelativeEpoch::Current => get_current_epoch(state),
         RelativeEpoch::Next => get_next_epoch(state),
+    }
+}
+
+#[must_use]
+pub fn absolute_slot<P: Preset>(state: &impl BeaconState<P>, relative_slot: RelativeSlot) -> Slot {
+    match relative_slot {
+        RelativeSlot::Previous => misc::previous_slot(state.slot()),
+        RelativeSlot::Current => state.slot(),
+        RelativeSlot::Next => get_next_slot(state),
     }
 }
 
@@ -109,6 +123,16 @@ pub fn relative_epoch<P: Preset>(
         Some(1) => Ok(RelativeEpoch::Current),
         Some(2) => Ok(RelativeEpoch::Previous),
         Some(_) => bail!(Error::EpochBeforePrevious),
+    }
+}
+
+pub fn relative_slot<P: Preset>(state: &impl BeaconState<P>, slot: Slot) -> Result<RelativeSlot> {
+    match get_next_slot(state).checked_sub(slot) {
+        None => bail!(Error::SlotAfterNext),
+        Some(0) => Ok(RelativeSlot::Next),
+        Some(1) => Ok(RelativeSlot::Current),
+        Some(2) => Ok(RelativeSlot::Previous),
+        Some(_) => bail!(Error::SlotBeforePrevious),
     }
 }
 
@@ -239,6 +263,31 @@ fn get_active_validator_indices_by_epoch<P: Preset>(
         .zip(state.validators())
         .filter(move |(_, validator)| predicates::is_active_validator(validator, epoch))
         .map(|(index, _)| index)
+}
+
+pub fn ptc_for_slot<P: Preset>(
+    state: &impl BeaconState<P>,
+    slot: Slot,
+) -> Result<&Vec<ValidatorIndex>> {
+    let relative_slot = relative_slot(state, slot)?;
+    get_or_try_init_ptc_indices(state, relative_slot, true)
+}
+
+pub fn get_or_try_init_ptc_indices<P: Preset>(
+    state: &impl BeaconState<P>,
+    relative_slot: RelativeSlot,
+    report_cache_miss: bool,
+) -> Result<&Vec<ValidatorIndex>> {
+    state.cache().ptc_indices[relative_slot].get_or_try_init(|| {
+        if report_cache_miss {
+            #[cfg(feature = "metrics")]
+            if let Some(metrics) = METRICS.get() {
+                metrics.ptc_indices_init_count.inc();
+            }
+        }
+
+        get_ptc(state, relative_slot)
+    })
 }
 
 // Only proposer selection needs the list of validators to be in order. Removing this function in
@@ -1050,12 +1099,14 @@ pub fn get_beacon_proposer_indices<P: Preset>(
     )
 }
 
-pub fn ptc_for_slot<P: Preset>(
+pub fn get_ptc<P: Preset>(
     state: &impl BeaconState<P>,
-    slot: Slot,
-) -> Result<ContiguousVector<ValidatorIndex, P::PtcSize>> {
+    relative_slot: RelativeSlot,
+) -> Result<Vec<ValidatorIndex>> {
+    let slot = absolute_slot(state, relative_slot);
     let epoch = misc::compute_epoch_at_slot::<P>(slot);
-    let seed = get_seed_by_epoch(state, epoch, DOMAIN_PTC_ATTESTER);
+    let relative_epoch = relative_epoch(state, epoch)?;
+    let seed = get_seed(state, relative_epoch, DOMAIN_PTC_ATTESTER);
     let seed = hashing::hash_256_64(seed, slot);
 
     // > Concatenate all committees for this slot in order
@@ -1067,11 +1118,7 @@ pub fn ptc_for_slot<P: Preset>(
         seed,
         P::PtcSize::USIZE,
         false,
-    )?
-    .into_iter()
-    .take(P::PtcSize::USIZE)
-    .pipe(ContiguousVector::try_from_iter)
-    .map_err(Into::into)
+    )
 }
 
 pub fn get_indexed_payload_attestation<P: Preset>(
@@ -1089,7 +1136,7 @@ pub fn get_indexed_payload_attestation<P: Preset>(
         ContiguousList::try_from_iter(ptc.into_iter().zip(0..).filter_map(|(index, i)| {
             aggregation_bits
                 .get(i)
-                .and_then(|is_true| is_true.then_some(index))
+                .and_then(|is_true| is_true.then_some(*index))
         }))?;
 
     Ok(IndexedPayloadAttestation {
