@@ -326,9 +326,11 @@ where
         )
     }
 
+    #[expect(clippy::unused_self)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn on_own_execution_payload_envelope(
         &self,
-        wait_group: W,
+        _wait_group: W,
         envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
     ) {
         // TODO (gloas): Implement direct task spawn (from commit ad16f5c4a3e6f2d4931ea92fa35e9c4d6564ca80)

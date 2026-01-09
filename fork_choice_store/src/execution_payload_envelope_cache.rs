@@ -16,6 +16,7 @@ impl<P: Preset> ExecutionPayloadEnvelopeCache<P> {
         Some(self.envelopes.get(&block_root)?.0.clone_arc())
     }
 
+    #[expect(dead_code)]
     pub fn insert(&mut self, envelope: Arc<SignedExecutionPayloadEnvelope<P>>) {
         let slot = envelope.message.slot;
         let block_root = envelope.message.beacon_block_root;
@@ -51,6 +52,7 @@ impl<P: Preset> ExecutionPayloadEnvelopeCache<P> {
             .map(|(root, (envelope, _, _))| (*root, envelope.clone_arc()))
     }
 
+    #[expect(dead_code)]
     pub fn size(&self) -> usize {
         self.envelopes.len()
     }
