@@ -1,10 +1,13 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use arithmetic::NonZeroExt as _;
+use helper_functions::signing::SignForSingleFork as _;
 use helper_functions::{
     accessors::{get_builder_payment_quorum_threshold, get_current_epoch, get_next_epoch},
     electra::{initiate_validator_exit, is_eligible_for_activation_queue},
+    error::SignatureKind,
     misc::{compute_activation_exit_epoch, vec_of_default},
     predicates::{is_active_validator, is_eligible_for_activation},
+    verifier::{SingleVerifier, Verifier},
 };
 use itertools::Itertools as _;
 use pubkey_cache::PubkeyCache;
@@ -14,12 +17,16 @@ use typenum::Unsigned as _;
 use types::{
     capella::containers::HistoricalSummary,
     config::Config,
-    gloas::{beacon_state::BeaconState, containers::BuilderPendingPayment},
+    gloas::{
+        beacon_state::BeaconState,
+        containers::{BuilderPendingPayment, SignedProposerPreferences},
+    },
     preset::{BuilderPendingPaymentsLength, Preset},
     traits::{BeaconState as _, PostGloasBeaconState},
 };
 
 use super::epoch_intermediates;
+use crate::unphased::Error;
 use crate::{
     altair::{self, EpochDeltasForTransition, EpochReport},
     electra, fulu, unphased,
@@ -259,6 +266,59 @@ fn process_registry_updates<P: Preset>(
             .get_mut(validator_index)?
             .activation_epoch = activation_exit_epoch;
     }
+
+    Ok(())
+}
+
+pub fn validate_proposer_preference<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &impl PostGloasBeaconState<P>,
+    signed_proposer_preference: SignedProposerPreferences,
+) -> Result<()> {
+    validate_proposer_preference_with_verifier(
+        config,
+        pubkey_cache,
+        state,
+        signed_proposer_preference,
+        SingleVerifier,
+    )
+}
+
+pub fn validate_proposer_preference_with_verifier<P: Preset>(
+    config: &Config,
+    pubkey_cache: &PubkeyCache,
+    state: &impl PostGloasBeaconState<P>,
+    signed_proposer_preference: SignedProposerPreferences,
+    mut verifier: impl Verifier,
+) -> Result<()> {
+    let preference = signed_proposer_preference.message;
+
+    // > Check if the validator is the expected proposer for that slot
+    let proposer_lookahead_index =
+        P::SlotsPerEpoch::U64 + (preference.proposal_slot % P::SlotsPerEpoch::U64);
+    let expected_proposer = state
+        .proposer_lookahead()
+        .get(proposer_lookahead_index)
+        .copied()?;
+
+    ensure!(
+        preference.validator_index == expected_proposer,
+        Error::<P>::UnexpectedProposerPreference {
+            slot: preference.proposal_slot,
+            validator_index: preference.validator_index,
+            expected_proposer,
+        }
+    );
+
+    // > Verify signature
+    let proposer = state.validators().get(preference.validator_index)?;
+    verifier.verify_singular(
+        preference.signing_root(config, state),
+        signed_proposer_preference.signature,
+        pubkey_cache.get_or_insert(proposer.pubkey)?,
+        SignatureKind::ProposerPreference,
+    )?;
 
     Ok(())
 }

@@ -1353,7 +1353,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
         let builder_index = bid.builder_index;
 
         // > off-protocol payment is disallowed to gossip via p2p and API, the `bid.execution_payment` MUST be zero
-        if origin.off_protocol_bid_disallowed() {
+        if origin.verify_execution_payment() {
             ensure!(
                 bid.execution_payment == 0,
                 Error::<P>::ExecutionPayloadBidOffProtocolPaymentDisallowed { payload_bid }

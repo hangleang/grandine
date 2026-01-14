@@ -62,7 +62,9 @@ use types::{
         containers::{DataColumnIdentifier, DataColumnsByRootIdentifier},
         primitives::ColumnIndex,
     },
-    gloas::containers::{PayloadAttestationMessage, SignedExecutionPayloadEnvelope},
+    gloas::containers::{
+        PayloadAttestationMessage, SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+    },
     nonstandard::{CustodyMode, Phase, RelativeEpoch, WithStatus},
     phase0::{
         consts::{FAR_FUTURE_EPOCH, GENESIS_EPOCH},
@@ -75,8 +77,9 @@ use types::{
 
 use crate::{
     messages::{
-        ApiToP2p, P2pToSlasher, P2pToSync, P2pToValidator, ServiceInboundMessage,
-        ServiceOutboundMessage, SubnetServiceToP2p, SyncToP2p, ValidatorToP2p,
+        ApiToP2p, BuilderToP2p, P2pToBuilder, P2pToSlasher, P2pToSync, P2pToValidator,
+        ServiceInboundMessage, ServiceOutboundMessage, SubnetServiceToP2p, SyncToP2p,
+        ValidatorToP2p,
     },
     misc::{
         AttestationSubnetActions, RPCRequestType, SubnetPeerDiscovery, SyncCommitteeSubnetAction,
@@ -115,8 +118,10 @@ pub struct Channels<P: Preset> {
     pub pool_to_p2p_rx: UnboundedReceiver<PoolToP2pMessage>,
     pub p2p_to_sync_tx: UnboundedSender<P2pToSync<P>>,
     pub p2p_to_validator_tx: UnboundedSender<P2pToValidator<P>>,
+    pub p2p_to_builder_tx: UnboundedSender<P2pToBuilder>,
     pub sync_to_p2p_rx: UnboundedReceiver<SyncToP2p<P>>,
     pub validator_to_p2p_rx: UnboundedReceiver<ValidatorToP2p<P>>,
+    pub builder_to_p2p_rx: UnboundedReceiver<BuilderToP2p<P>>,
     pub network_to_slasher_tx: Option<UnboundedSender<P2pToSlasher<P>>>,
     pub subnet_service_to_p2p_rx: UnboundedReceiver<SubnetServiceToP2p>,
 }
@@ -572,6 +577,36 @@ impl<P: Preset> Network<P> {
                     debug_info.handle();
                 },
 
+                message = self.channels.builder_to_p2p_rx.select_next_some() => {
+                    let debug_info = message_debug_info(&message);
+
+                    match message {
+                        BuilderToP2p::Accept(gossip_id) => {
+                            self.report_outcome(gossip_id, MessageAcceptance::Accept);
+                        }
+                        BuilderToP2p::Ignore(gossip_id) => {
+                            self.report_outcome(gossip_id, MessageAcceptance::Ignore);
+                        }
+                        BuilderToP2p::Reject(gossip_id, pool_rejection_reason) => {
+                            self.report_outcome(gossip_id.clone(), MessageAcceptance::Reject);
+                            self.report_peer(
+                                gossip_id.source,
+                                PeerAction::LowToleranceError,
+                                ReportSource::Processor,
+                                pool_rejection_reason,
+                            );
+                        }
+                        BuilderToP2p::PublishPayloadBid(payload_bid) => {
+                            self.publish_execution_payload_bid(payload_bid);
+                        },
+                        BuilderToP2p::PublishExecutionPayloadEnvelope(envelope) => {
+                            self.publish_execution_payload_envelope(envelope);
+                        }
+                    }
+
+                    debug_info.handle();
+                },
+
                 message = self.channels.sync_to_p2p_rx.select_next_some() => {
                     let debug_info = message_debug_info(&message);
 
@@ -809,6 +844,17 @@ impl<P: Preset> Network<P> {
         );
 
         self.publish(PubsubMessage::ExecutionPayload(envelope));
+    }
+
+    fn publish_execution_payload_bid(&self, payload_bid: Arc<SignedExecutionPayloadBid>) {
+        debug_with_peers!(
+            "publishing execution payload bid (parent_root: {:?}, slot: {}, builder_index: {})",
+            payload_bid.message.parent_block_root,
+            payload_bid.message.slot,
+            payload_bid.message.builder_index,
+        );
+
+        self.publish(PubsubMessage::ExecutionPayloadBid(payload_bid));
     }
 
     fn publish_singular_attestation(&self, attestation: Arc<Attestation<P>>, subnet_id: SubnetId) {
@@ -2469,6 +2515,22 @@ impl<P: Preset> Network<P> {
 
                 self.controller
                     .on_gossip_execution_payload_bid(payload_bid, GossipId { source, message_id });
+            }
+            PubsubMessage::ProposerPreference(signed_proposer_preference) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_gossip_object(&["proposer_preferences"]);
+                }
+
+                debug_with_peers!(
+                    "received signed proposer preference as gossip: {signed_proposer_preference:?} \
+                    from {source}",
+                );
+
+                P2pToBuilder::ProposerPreferences(
+                    signed_proposer_preference,
+                    GossipId { source, message_id },
+                )
+                .send(&self.channels.p2p_to_builder_tx);
             }
             PubsubMessage::LightClientFinalityUpdate(_) => {
                 debug_with_peers!("received light client finality update as gossip");

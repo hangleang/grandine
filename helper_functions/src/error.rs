@@ -97,6 +97,8 @@ pub enum SignatureKind {
     Multi,
     #[display("payload attestation signature")]
     PayloadAttestation,
+    #[display("proposer preference signature")]
+    ProposerPreference,
     #[display("RANDAO reveal")]
     Randao,
     #[display("selection proof")]

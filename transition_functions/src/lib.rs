@@ -238,6 +238,7 @@ pub mod fulu {
 
 pub mod gloas {
     pub use block_processing::{get_expected_withdrawals, validate_voluntary_exit};
+    pub use epoch_processing::validate_proposer_preference;
     pub use execution_payload_processing::process_execution_payload;
 
     pub(crate) use block_processing::{process_block, process_block_for_gossip};

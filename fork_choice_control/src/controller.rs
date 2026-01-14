@@ -57,8 +57,8 @@ use crate::{
     block_processor::BlockProcessor,
     events::EventChannels,
     messages::{
-        AttestationVerifierMessage, MutatorMessage, P2pMessage, PoolMessage, SubnetMessage,
-        SyncMessage, ValidatorMessage,
+        AttestationVerifierMessage, BuilderMessage, MutatorMessage, P2pMessage, PoolMessage,
+        SubnetMessage, SyncMessage, ValidatorMessage,
     },
     misc::{
         ProcessingTimings, SidecarsPendingReconstruction, VerifyAggregateAndProofResult,
@@ -126,6 +126,7 @@ where
         subnet_tx: impl UnboundedSink<SubnetMessage<W>>,
         sync_tx: impl UnboundedSink<SyncMessage<P>>,
         validator_tx: impl UnboundedSink<ValidatorMessage<P, W>>,
+        builder_tx: impl UnboundedSink<BuilderMessage<P, W>>,
         storage: Arc<Storage<P>>,
         unfinalized_blocks: impl DoubleEndedIterator<Item = Result<Arc<SignedBeaconBlock<P>>>>,
         finished_back_sync: bool,
@@ -181,6 +182,7 @@ where
             subnet_tx,
             sync_tx,
             validator_tx,
+            builder_tx,
         );
 
         mutator.process_unfinalized_blocks(unfinalized_blocks)?;
@@ -356,9 +358,11 @@ where
 
     pub fn on_own_execution_payload_envelope(
         &self,
+        wait_group: W,
         execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
     ) {
-        self.spawn_execution_payload_envelope_task(
+        self.spawn_execution_payload_envelope_task_with_wait_group(
+            wait_group,
             execution_payload_envelope,
             ExecutionPayloadEnvelopeOrigin::Own,
         );
@@ -389,6 +393,10 @@ where
             block,
             sender,
         })
+    }
+
+    pub fn on_own_execution_payload_bid(&self, payload_bid: Arc<SignedExecutionPayloadBid>) {
+        self.spawn_execution_payload_bid_task(payload_bid, ExecutionPayloadBidOrigin::Own);
     }
 
     pub fn on_gossip_execution_payload_bid(
@@ -910,10 +918,23 @@ where
         execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
         origin: ExecutionPayloadEnvelopeOrigin,
     ) {
+        self.spawn_execution_payload_envelope_task_with_wait_group(
+            self.owned_wait_group(),
+            execution_payload_envelope,
+            origin,
+        );
+    }
+
+    fn spawn_execution_payload_envelope_task_with_wait_group(
+        &self,
+        wait_group: W,
+        execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        origin: ExecutionPayloadEnvelopeOrigin,
+    ) {
         self.spawn(ExecutionPayloadEnvelopeTask {
             store_snapshot: self.owned_store_snapshot(),
             mutator_tx: self.owned_mutator_tx(),
-            wait_group: self.owned_wait_group(),
+            wait_group,
             execution_payload_envelope,
             state: None,
             origin,
