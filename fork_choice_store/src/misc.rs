@@ -23,6 +23,7 @@ use types::{
         SignedBeaconBlock,
     },
     deneb::containers::BlobSidecar,
+    gloas::containers::{CombinedPayloadAttestation, PayloadAttestationData},
     nonstandard::{PayloadStatus, Publishable, ValidationOutcome},
     phase0::{
         containers::{AttestationData, Checkpoint},
@@ -348,6 +349,65 @@ impl<P: Preset, I> AttestationItem<P, I> {
     }
 }
 
+#[derive(Debug)]
+pub struct PayloadAttestationItem<P: Preset> {
+    pub item: Arc<CombinedPayloadAttestation<P>>,
+    pub origin: PayloadAttestationOrigin,
+    pub signature_status: SignatureStatus,
+}
+
+impl<P: Preset> PayloadAttestationItem<P> {
+    #[must_use]
+    pub const fn unverified(
+        item: Arc<CombinedPayloadAttestation<P>>,
+        origin: PayloadAttestationOrigin,
+    ) -> Self {
+        Self {
+            item,
+            origin,
+            signature_status: SignatureStatus::Unverified,
+        }
+    }
+
+    #[must_use]
+    pub const fn verified(
+        item: Arc<CombinedPayloadAttestation<P>>,
+        origin: PayloadAttestationOrigin,
+    ) -> Self {
+        Self {
+            item,
+            origin,
+            signature_status: SignatureStatus::Verified,
+        }
+    }
+
+    #[must_use]
+    pub fn into_verified(self) -> Self {
+        let Self { item, origin, .. } = self;
+
+        Self {
+            item,
+            origin,
+            signature_status: SignatureStatus::Verified,
+        }
+    }
+
+    #[must_use]
+    pub fn verify_signatures(&self) -> bool {
+        !self.signature_status.is_verified() && self.origin.verify_signatures()
+    }
+
+    #[must_use]
+    pub fn data(&self) -> PayloadAttestationData {
+        self.item.data()
+    }
+
+    #[must_use]
+    pub fn item(&self) -> Arc<CombinedPayloadAttestation<P>> {
+        self.item.clone_arc()
+    }
+}
+
 #[derive(Debug, AsRefStr)]
 pub enum SignatureStatus {
     Verified,
@@ -482,6 +542,80 @@ impl AttesterSlashingOrigin {
             Self::Gossip => true,
             Self::Block => false,
             Self::Own => !Feature::TrustOwnAttesterSlashingSignatures.is_enabled(),
+        }
+    }
+}
+
+#[derive(Debug, AsRefStr)]
+pub enum PayloadAttestationOrigin {
+    Gossip(GossipId),
+    Api(OneshotSender<Result<ValidationOutcome>>),
+    Block(H256),
+    Own,
+}
+
+impl PayloadAttestationOrigin {
+    #[must_use]
+    pub fn split(
+        self,
+    ) -> (
+        Option<GossipId>,
+        Option<OneshotSender<Result<ValidationOutcome>>>,
+    ) {
+        match self {
+            Self::Gossip(gossip_id) => (Some(gossip_id), None),
+            Self::Api(sender) => (None, Some(sender)),
+            Self::Own | Self::Block(_) => (None, None),
+        }
+    }
+
+    #[must_use]
+    pub fn gossip_id(&self) -> Option<GossipId> {
+        match self {
+            Self::Gossip(gossip_id) => Some(gossip_id.clone()),
+            Self::Own | Self::Block(_) | Self::Api(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn gossip_id_ref(&self) -> Option<&GossipId> {
+        match self {
+            Self::Gossip(gossip_id) => Some(gossip_id),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn verify_signatures(&self) -> bool {
+        match self {
+            Self::Gossip(_) | Self::Api(_) => true,
+            Self::Block(_) => false,
+            Self::Own => !Feature::TrustOwnAttestationSignatures.is_enabled(),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_from_block(&self) -> bool {
+        matches!(self, Self::Block(_))
+    }
+
+    #[must_use]
+    pub const fn should_generate_event(&self) -> bool {
+        matches!(self, Self::Gossip(_) | Self::Api(_))
+    }
+
+    #[must_use]
+    pub const fn send_to_validator(&self) -> bool {
+        matches!(self, Self::Gossip(_) | Self::Api(_))
+    }
+
+    #[must_use]
+    pub const fn metrics_label(&self) -> &str {
+        match self {
+            Self::Gossip(_) => "Gossip",
+            Self::Own => "Own",
+            Self::Api(_) => "Api",
+            Self::Block(_) => "Block",
         }
     }
 }
@@ -734,6 +868,38 @@ impl<P: Preset> DataColumnSidecarAction<P> {
     }
 }
 
+// a list of Tuple(attesting_index, positions_in_committee)
+type AttestingIndicesPositions = Vec<(ValidatorIndex, Vec<usize>)>;
+
+#[derive(Debug)]
+pub enum PayloadAttestationAction<P: Preset> {
+    Accept {
+        payload_attestation: PayloadAttestationItem<P>,
+        attesting_indices_positions: AttestingIndicesPositions,
+    },
+    Ignore(PayloadAttestationItem<P>),
+    DelayUntilBlock(PayloadAttestationItem<P>, H256),
+}
+
+impl<P: Preset> PayloadAttestationAction<P> {
+    #[must_use]
+    pub fn into_verified(self) -> Self {
+        match self {
+            Self::Accept {
+                payload_attestation,
+                attesting_indices_positions,
+            } => Self::Accept {
+                payload_attestation: payload_attestation.into_verified(),
+                attesting_indices_positions,
+            },
+            Self::Ignore(payload_attestation) => Self::Ignore(payload_attestation.into_verified()),
+            Self::DelayUntilBlock(payload_attestation, block_root) => {
+                Self::DelayUntilBlock(payload_attestation.into_verified(), block_root)
+            }
+        }
+    }
+}
+
 pub enum PartialBlockAction {
     Accept,
     Ignore,
@@ -750,6 +916,13 @@ pub enum PartialAttestationAction {
 pub struct ValidAttestation<P: Preset> {
     pub data: AttestationData,
     pub attesting_indices: AttestingIndices<P>,
+    pub is_from_block: bool,
+}
+
+#[derive(Clone)]
+pub struct ValidPayloadAttestation {
+    pub data: PayloadAttestationData,
+    pub attesting_indices_positions: AttestingIndicesPositions,
     pub is_from_block: bool,
 }
 
@@ -962,6 +1135,34 @@ impl<P: Preset, I> AttestationValidationError<P, I> {
             Self::SingularAttestationOnIncorrectSubnet { attestation, .. }
             | Self::SingularAttestationHasMultipleAggregationBitsSet { attestation }
             | Self::Other { attestation, .. } => *attestation,
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum PayloadAttestationValidationError<P: Preset> {
+    #[error("payload attestation's block is invalid: {payload_attestation:?}")]
+    PayloadAttestationInvalidBlock {
+        payload_attestation: Box<PayloadAttestationItem<P>>,
+    },
+    #[error("payload attestation validation error: {payload_attestation:?} {source:}")]
+    Other {
+        source: AnyhowError,
+        payload_attestation: Box<PayloadAttestationItem<P>>,
+    },
+}
+
+impl<P: Preset> PayloadAttestationValidationError<P> {
+    #[must_use]
+    pub fn payload_attestation(self) -> PayloadAttestationItem<P> {
+        match self {
+            Self::PayloadAttestationInvalidBlock {
+                payload_attestation,
+            }
+            | Self::Other {
+                payload_attestation,
+                ..
+            } => *payload_attestation,
         }
     }
 }

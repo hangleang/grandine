@@ -44,7 +44,10 @@ use keymanager::ProposerConfigs;
 use liveness_tracker::ValidatorToLiveness;
 use logging::{debug_with_peers, error_with_peers, info_with_peers, warn_with_peers};
 use once_cell::sync::OnceCell;
-use operation_pools::{AttestationAggPool, Origin, PoolAdditionOutcome, SyncCommitteeAggPool};
+use operation_pools::{
+    AttestationAggPool, Origin, PayloadAttestationAggPool, PoolAdditionOutcome,
+    SyncCommitteeAggPool,
+};
 use p2p::{P2pToValidator, ToSubnetService, ValidatorToP2p};
 use prometheus_metrics::Metrics;
 use rayon::iter::{IntoParallelIterator as _, ParallelIterator as _};
@@ -73,6 +76,7 @@ use types::{
         AggregateAndProof as ElectraAggregateAndProof,
         SignedAggregateAndProof as ElectraSignedAggregateAndProof, SingleAttestation,
     },
+    gloas::containers::{PayloadAttestationData, PayloadAttestationMessage},
     nonstandard::{
         CustodyMode, KzgProofs, OwnAttestation, Phase, SyncCommitteeEpoch, WithBlobsAndMev,
         WithStatus,
@@ -95,6 +99,7 @@ use crate::{
     messages::{ApiToValidator, InternalMessage},
     misc::{Aggregator, SignedBeaconBlockOrBlockRoot, SyncCommitteeMember},
     own_beacon_committee_members::{BeaconCommitteeMember, OwnBeaconCommitteeMembers},
+    own_ptc_members::{OwnPTCMembers, PTCMember},
     own_sync_committee_subscriptions::OwnSyncCommitteeSubscriptions,
     slot_head::SlotHead,
     validator_config::ValidatorConfig,
@@ -147,6 +152,8 @@ pub struct Validator<P: Preset, W: Wait> {
     next_graffiti_index: usize,
     attestation_agg_pool: Arc<AttestationAggPool<P, W>>,
     own_beacon_committee_members: Arc<OwnBeaconCommitteeMembers>,
+    own_payload_attestations: OnceCell<Vec<PayloadAttestationMessage>>,
+    own_ptc_members: Arc<OwnPTCMembers>,
     own_singular_attestations: OnceCell<Vec<OwnAttestation<P>>>,
     own_sync_committee_members: OnceCell<Vec<SyncCommitteeMember>>,
     own_sync_committee_subscriptions: OwnSyncCommitteeSubscriptions<P>,
@@ -163,6 +170,7 @@ pub struct Validator<P: Preset, W: Wait> {
     subnet_service_tx: UnboundedSender<ToSubnetService>,
     registered_validators:
         BTreeMap<Epoch, BTreeMap<PublicKeyBytes, (ValidatorRegistrationV1, Signature)>>,
+    payload_attestation_agg_pool: Arc<PayloadAttestationAggPool<P, W>>,
     sync_committee_agg_pool: Arc<SyncCommitteeAggPool<P, W>>,
     metrics: Option<Arc<Metrics>>,
     validator_statistics: Option<Arc<ValidatorStatistics>>,
@@ -187,6 +195,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         proposer_configs: Arc<ProposerConfigs>,
         signer: Arc<Signer>,
         slashing_protector: Arc<Mutex<SlashingProtector>>,
+        payload_attestation_agg_pool: Arc<PayloadAttestationAggPool<P, W>>,
         sync_committee_agg_pool: Arc<SyncCommitteeAggPool<P, W>>,
         metrics: Option<Arc<Metrics>>,
         validator_statistics: Option<Arc<ValidatorStatistics>>,
@@ -224,6 +233,8 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             next_graffiti_index: 0,
             attestation_agg_pool,
             own_beacon_committee_members,
+            own_payload_attestations: OnceCell::new(),
+            own_ptc_members: Arc::new(OwnPTCMembers::new()),
             own_singular_attestations: OnceCell::new(),
             own_sync_committee_members: OnceCell::new(),
             own_sync_committee_subscriptions: OwnSyncCommitteeSubscriptions::default(),
@@ -236,6 +247,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             proposer_configs,
             signer,
             slashing_protector,
+            payload_attestation_agg_pool,
             sync_committee_agg_pool,
             slasher_to_validator_rx,
             subnet_service_tx,
@@ -296,6 +308,20 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                             ValidatorToLiveness::ValidAttestation(attestation)
                                 .send(validator_to_liveness_tx);
                         }
+                    },
+                    ValidatorMessage::ValidPayloadAttestation(wait_group, payload_attestation) => {
+                        let span = tracing::debug_span!("ValidatorMessage::ValidPayloadAttestation", service = "validator");
+                        let _enter = span.enter();
+
+                        self.payload_attestation_agg_pool
+                            .insert_payload_attestation(wait_group, payload_attestation);
+
+                        // TODO(gloas): apply payload attestation to liveness_tracker
+                        //
+                        // if let Some(validator_to_liveness_tx) = &self.validator_to_liveness_tx {
+                        //     ValidatorToLiveness::ValidPayloadAttestation(payload_attestation)
+                        //         .send(validator_to_liveness_tx);
+                        // }
                     },
                     ValidatorMessage::PrepareExecutionPayload(slot, safe_execution_payload_hash, finalized_execution_payload_hash) => {
                         self.prepare_execution_payload(slot, safe_execution_payload_hash, finalized_execution_payload_hash).await
@@ -603,7 +629,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         if let Some(metrics) = self.metrics.as_ref()
             && tick.is_start_of_interval()
         {
-            let tick_delay = tick.delay(&self.chain_config, self.controller.genesis_time())?;
+            let tick_delay = tick.delay::<P>(&self.chain_config, self.controller.genesis_time())?;
             debug_with_peers!("tick_delay: {tick_delay:?} for {tick:?}");
             metrics.set_tick_delay(tick.kind.as_ref(), tick_delay);
         }
@@ -732,6 +758,7 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                     .map(|metrics| metrics.validator_propose_tick_times.start_timer());
 
                 self.discard_previous_slot_attestations();
+                self.discard_previous_slot_payload_attestations();
                 self.propose(wait_group, &slot_head).await?;
                 self.published_own_sync_committee_messages_for = None;
             }
@@ -776,6 +803,13 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 if misc::is_epoch_start::<P>(slot) {
                     let current_epoch = misc::compute_epoch_at_slot::<P>(slot);
                     self.spawn_slashing_protection_pruning(current_epoch);
+                }
+            }
+            TickKind::PayloadAttest => {
+                if let Err(error) = self.attest_payload(&wait_group, &slot_head).await {
+                    error_with_peers!(
+                        "failed to produce and publish own payload attestations: {error:?}"
+                    );
                 }
             }
             _ => {}
@@ -1023,10 +1057,12 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 slot_head.slot(),
             ),
             SignedBeaconBlockOrBlockRoot::Block(beacon_block) => {
+                let beacon_block_root = beacon_block.message().hash_tree_root();
+
                 info_with_peers!(
                     "validator {} proposing beacon block with root {:?} in slot {}",
                     proposer_index,
-                    beacon_block.message().hash_tree_root(),
+                    beacon_block_root,
                     slot_head.slot(),
                 );
 
@@ -1037,8 +1073,17 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 if let Some(blobs) = block_blobs
                     && !blobs.is_empty()
                 {
-                    self.publish_blob_data(&wait_group, slot_head, &block, blobs, block_proofs)
+                    if slot_head.phase().is_peerdas_activated() {
+                        self.publish_data_column_sidecars(
+                            &wait_group,
+                            block.clone_arc(),
+                            blobs,
+                            block_proofs,
+                        )
                         .await?;
+                    } else {
+                        self.publish_blob_sidecars(&wait_group, &block, blobs, block_proofs)?;
+                    }
                 }
 
                 self.controller
@@ -1137,72 +1182,63 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
         Ok(signed_block)
     }
 
-    async fn publish_blob_data(
+    async fn publish_data_column_sidecars(
         &self,
         wait_group: &W,
-        slot_head: &SlotHead<P>,
+        block: Arc<SignedBeaconBlock<P>>,
+        blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
+        block_proofs: Option<KzgProofs<P>>,
+    ) -> Result<()> {
+        let data_column_sidecars = eip_7594::construct_data_column_sidecars_from_blobs(
+            block.into(),
+            blobs.to_vec(),
+            block_proofs
+                .unwrap_or_else(KzgProofs::empty_fulu)
+                .into_iter()
+                .collect_vec(),
+            self.controller.store_config().kzg_backend,
+            self.metrics.clone(),
+        )
+        .await?;
+
+        for data_column_sidecar in data_column_sidecars {
+            if self
+                .controller
+                .sampling_columns()
+                .into_iter()
+                .contains(&data_column_sidecar.index())
+            {
+                self.controller
+                    .on_own_data_column_sidecar(wait_group.clone(), data_column_sidecar.clone_arc())
+                    .await;
+            }
+
+            ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar).send(&self.p2p_tx);
+        }
+
+        Ok(())
+    }
+
+    fn publish_blob_sidecars(
+        &self,
+        wait_group: &W,
         block: &Arc<SignedBeaconBlock<P>>,
         blobs: ContiguousList<Blob<P>, P::MaxBlobCommitmentsPerBlock>,
         block_proofs: Option<KzgProofs<P>>,
     ) -> Result<()> {
-        if self
-            .chain_config
-            .phase_at_slot::<P>(slot_head.slot())
-            .is_peerdas_activated()
-        {
-            let timer = self
-                .metrics
-                .as_ref()
-                .map(|metrics| metrics.data_column_sidecar_computation.start_timer());
+        for blob_sidecar in misc::construct_blob_sidecars(
+            block,
+            blobs.into_iter(),
+            block_proofs
+                .unwrap_or_else(KzgProofs::empty_deneb)
+                .into_iter(),
+        )? {
+            let blob_sidecar = Arc::new(blob_sidecar);
 
-            let block = block.clone_arc();
-            let kzg_backend = self.controller.store_config().kzg_backend;
+            self.controller
+                .on_own_blob_sidecar(wait_group.clone(), blob_sidecar.clone_arc());
 
-            let data_column_sidecars = tokio::task::spawn_blocking(move || {
-                let cells_and_kzg_proofs = eip_7594::try_convert_to_cells_and_kzg_proofs::<P>(
-                    blobs.as_ref(),
-                    block_proofs.unwrap_or_else(KzgProofs::empty_fulu).as_ref(),
-                    kzg_backend,
-                )?;
-
-                eip_7594::construct_fulu_data_column_sidecars(&block, &cells_and_kzg_proofs)
-            })
-            .await??;
-
-            prometheus_metrics::stop_and_record(timer);
-
-            for data_column_sidecar in data_column_sidecars {
-                if self
-                    .controller
-                    .sampling_columns()
-                    .into_iter()
-                    .contains(&data_column_sidecar.index())
-                {
-                    self.controller
-                        .on_own_data_column_sidecar(
-                            wait_group.clone(),
-                            data_column_sidecar.clone_arc(),
-                        )
-                        .await;
-                }
-
-                ValidatorToP2p::PublishDataColumnSidecar(data_column_sidecar).send(&self.p2p_tx);
-            }
-        } else {
-            for blob_sidecar in misc::construct_blob_sidecars(
-                block,
-                blobs.into_iter(),
-                block_proofs
-                    .unwrap_or_else(KzgProofs::empty_deneb)
-                    .into_iter(),
-            )? {
-                let blob_sidecar = Arc::new(blob_sidecar);
-
-                self.controller
-                    .on_own_blob_sidecar(wait_group.clone(), blob_sidecar.clone_arc());
-
-                ValidatorToP2p::PublishBlobSidecar(blob_sidecar).send(&self.p2p_tx);
-            }
+            ValidatorToP2p::PublishBlobSidecar(blob_sidecar).send(&self.p2p_tx);
         }
 
         Ok(())
@@ -1636,6 +1672,87 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
     }
 
     #[instrument(level = "debug", skip_all)]
+    async fn attest_payload(&self, wait_group: &W, slot_head: &SlotHead<P>) -> Result<()> {
+        if self.wait_for_fully_validated_head(slot_head).await.is_err() {
+            warn_with_peers!(
+                "validator cannot participate in payload attestation because \
+                 chain head has not been fully verified by an execution engine",
+            );
+
+            return Ok(());
+        }
+
+        // Skip attesting if validators already attested at slot
+        if self.payload_attested_in_current_slot() {
+            return Ok(());
+        }
+
+        // Skip attesting if validators has not seen any beacon block for the assigned slot
+        if self
+            .controller
+            .block_root_by_slot(slot_head.slot())?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        let _timer = self
+            .metrics
+            .as_ref()
+            .map(|metrics| metrics.validator_attest_payload_times.start_timer());
+
+        let needs_to_compute_members = self
+            .own_ptc_members
+            .needs_to_compute_members_at_slot(slot_head.slot())
+            .await;
+
+        if needs_to_compute_members {
+            self.update_ptc_members(wait_group.clone(), slot_head.beacon_state.clone_arc());
+        }
+
+        let Some(own_members) = self.own_ptc_members.get_at_slot(slot_head.slot()).await else {
+            return Ok(());
+        };
+
+        let own_payload_attestations = self
+            .own_payload_attestations(slot_head, &own_members)
+            .await?;
+
+        if own_payload_attestations.is_empty() {
+            return Ok(());
+        }
+
+        info_with_peers!(
+            "validators [{}] attesting to payload in slot {}",
+            own_payload_attestations
+                .iter()
+                .map(|a| a.validator_index)
+                .format(", "),
+            slot_head.slot(),
+        );
+
+        for own_payload_attestation in own_payload_attestations {
+            ValidatorToP2p::PublishPayloadAttestation(Arc::new(*own_payload_attestation))
+                .send(&self.p2p_tx);
+        }
+
+        let next_proposer_index = tokio::task::block_in_place(|| slot_head.next_proposer_index())?;
+        let public_key = slot_head.public_key(next_proposer_index);
+        let signer_snapshot = self.signer.load();
+
+        // Only add the messages into the pool if any attached validators is the next proposer
+        if signer_snapshot.has_key(*public_key) {
+            self.payload_attestation_agg_pool.aggregate_own_messages(
+                wait_group.clone(),
+                own_payload_attestations.to_vec(),
+                slot_head.beacon_state.clone_arc(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
     async fn attest_gossip_block(&mut self, wait_group: &W, head: ChainLink<P>) {
         let Some(last_tick) = self.last_tick else {
             return;
@@ -1748,6 +1865,8 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                         target,
                     };
 
+                    // TODO: (gloas): update `index` field to signal payload status
+                    // see spec: https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/validator.md#attestation
                     if phase >= Phase::Electra {
                         data.index = 0;
                     }
@@ -1984,6 +2103,102 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
             .collect())
     }
 
+    async fn own_payload_attestations(
+        &self,
+        slot_head: &SlotHead<P>,
+        own_members: &[PTCMember],
+    ) -> Result<&[PayloadAttestationMessage]> {
+        if let Some(own_payload_attestations) = self.own_payload_attestations.get() {
+            return Ok(own_payload_attestations);
+        }
+
+        let (triples, other_data): (Vec<_>, Vec<_>) = tokio::task::block_in_place(|| {
+            let data = PayloadAttestationData {
+                slot: slot_head.slot(),
+                beacon_block_root: slot_head.beacon_block_root,
+                // TODO: (gloas): set to `true` if signed envelope reference by `block_root` has been seen in fork choice
+                payload_present: true,
+                // TODO: (gloas): set to `true` if blob data is available defined by fork choice
+                blob_data_available: true,
+            };
+
+            let doppelganger_protection = self
+                .doppelganger_protection
+                .as_deref()
+                .map(DoppelgangerProtection::load);
+
+            own_members
+                .iter()
+                .filter_map(|member| {
+                    if let Some(doppelganger_protection) = &doppelganger_protection
+                        && !doppelganger_protection.is_validator_active(member.public_key)
+                    {
+                        info_with_peers!(
+                            "Validator {:?} skipping attesting duty in slot {} \
+                                 since not enough time has passed to ensure there are \
+                                 no doppelganger validators participating on network. \
+                                 Validator will start performing duties on slot {}.",
+                            member.public_key,
+                            slot_head.slot(),
+                            doppelganger_protection.tracking_end_slot::<P>(member.public_key),
+                        );
+                        return None;
+                    }
+
+                    let triple = SigningTriple {
+                        message: SigningMessage::<P>::PayloadAttestation(data),
+                        signing_root: data
+                            .signing_root(&self.chain_config, &slot_head.beacon_state),
+                        public_key: member.public_key,
+                    };
+
+                    Some((triple, (data, member)))
+                })
+                .unzip()
+        });
+
+        let snapshot = self.signer.load();
+
+        let result = snapshot
+            .sign_triples(
+                triples,
+                slot_head.beacon_state.as_ref(),
+                self.slashing_protector.clone_arc(),
+            )
+            .await;
+
+        let signatures = match result {
+            Ok(signatures) => signatures,
+            Err(error) => {
+                warn_with_peers!("failed to sign payload attestations: {error:?}");
+                return Ok(&[]);
+            }
+        };
+
+        self.own_payload_attestations
+            .get_or_try_init(|| {
+                let _timer = self.metrics.as_ref().map(|metrics| {
+                    metrics
+                        .validator_own_payload_attestations_init_times
+                        .start_timer()
+                });
+
+                let own_payload_attestations = signatures
+                    .zip(other_data)
+                    .filter_map(|(signature, (data, member))| {
+                        signature.map(|signature| PayloadAttestationMessage {
+                            validator_index: member.validator_index,
+                            data,
+                            signature: signature.into(),
+                        })
+                    })
+                    .collect();
+
+                Ok(own_payload_attestations)
+            })
+            .map(Vec::as_slice)
+    }
+
     fn own_sync_committee_members(&self) -> impl Iterator<Item = &SyncCommitteeMember> {
         self.own_sync_committee_members.get().into_iter().flatten()
     }
@@ -2037,6 +2252,14 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
 
     fn discard_previous_slot_attestations(&mut self) {
         self.own_singular_attestations.take();
+    }
+
+    fn payload_attested_in_current_slot(&self) -> bool {
+        self.own_payload_attestations.get().is_some()
+    }
+
+    fn discard_previous_slot_payload_attestations(&mut self) {
+        self.own_payload_attestations.take();
     }
 
     fn discard_old_registered_validators(&mut self, current_epoch: Epoch) {
@@ -2116,6 +2339,41 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                     .send(&self.subnet_service_tx);
             }
         }
+    }
+
+    fn update_ptc_members(&self, wait_group: W, mut beacon_state: Arc<BeaconState<P>>) {
+        let chain_config = self.chain_config.clone_arc();
+        let controller = self.controller.clone_arc();
+        let current_slot = beacon_state.slot();
+        let own_members = self.own_ptc_members.clone_arc();
+        let own_public_keys = self.own_public_keys();
+
+        tokio::task::spawn(async move {
+            for slot in OwnPTCMembers::slots_to_compute_in_advance(current_slot) {
+                let phase_at_slot = chain_config.phase_at_slot::<P>(slot);
+
+                if chain_config.phase_at_slot::<P>(current_slot) != phase_at_slot {
+                    beacon_state = match controller
+                        .preprocessed_state_at_epoch(chain_config.fork_epoch(phase_at_slot))
+                        .await
+                    {
+                        Ok(with_status) => with_status.value,
+                        Err(error) => {
+                            warn_with_peers!(
+                                "failed to preprocess next fork beacon state for beacon committee subscriptions: {error:?}"
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                own_members
+                    .init_at_slot(&beacon_state, slot, &own_public_keys)
+                    .await;
+            }
+
+            drop(wait_group);
+        });
     }
 
     async fn update_subnet_subscriptions(
@@ -2345,6 +2603,16 @@ impl<P: Preset, W: Wait + Sync> Validator<P, W> {
                 &type_name,
                 "own_singular_attestations",
                 self.own_singular_attestations
+                    .get()
+                    .map(Vec::len)
+                    .unwrap_or(0),
+            );
+
+            metrics.set_collection_length(
+                module_path!(),
+                &type_name,
+                "own_payload_attestations",
+                self.own_payload_attestations
                     .get()
                     .map(Vec::len)
                     .unwrap_or(0),

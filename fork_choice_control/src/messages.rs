@@ -11,7 +11,8 @@ use execution_engine::PayloadStatusV1;
 use fork_choice_store::{
     AggregateAndProofOrigin, AttestationAction, AttestationItem, AttestationValidationError,
     AttesterSlashingOrigin, BlobSidecarAction, BlobSidecarOrigin, BlockAction, BlockOrigin,
-    ChainLink, DataColumnSidecarAction, DataColumnSidecarOrigin,
+    ChainLink, DataColumnSidecarAction, DataColumnSidecarOrigin, PayloadAttestationAction,
+    PayloadAttestationValidationError,
 };
 use logging::debug_with_peers;
 use serde::Serialize;
@@ -22,6 +23,7 @@ use types::{
     },
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
+    gloas::containers::PayloadAttestationMessage,
     phase0::{
         containers::Checkpoint,
         primitives::{ExecutionBlockHash, H256, Slot, ValidatorIndex},
@@ -32,7 +34,7 @@ use types::{
 use crate::{
     misc::{
         MutatorRejectionReason, ProcessingTimings, VerifyAggregateAndProofResult,
-        VerifyAttestationResult,
+        VerifyAttestationResult, VerifyPayloadAttestationResult,
     },
     unbounded_sink::UnboundedSink,
 };
@@ -110,6 +112,10 @@ pub enum MutatorMessage<P: Preset, W> {
         results:
             Vec<Result<AttestationAction<P, GossipId>, AttestationValidationError<P, GossipId>>>,
     },
+    BlockPayloadAttestations {
+        wait_group: W,
+        results: Vec<Result<PayloadAttestationAction<P>, PayloadAttestationValidationError<P>>>,
+    },
     AttesterSlashing {
         wait_group: W,
         result: Result<Vec<ValidatorIndex>>,
@@ -147,6 +153,14 @@ pub enum MutatorMessage<P: Preset, W> {
         wait_group: W,
         persisted_data_column_ids: Vec<DataColumnIdentifier>,
         slot: Slot,
+    },
+    PayloadAttestation {
+        wait_group: W,
+        result: VerifyPayloadAttestationResult<P>,
+    },
+    PayloadAttestationBatch {
+        wait_group: W,
+        results: Vec<VerifyPayloadAttestationResult<P>>,
     },
     PreprocessedBeaconState {
         state: Arc<BeaconState<P>>,
@@ -247,6 +261,7 @@ pub enum ValidatorMessage<P: Preset, W> {
     Tick(W, Tick),
     Head(W, ChainLink<P>),
     ValidAttestation(W, Arc<Attestation<P>>),
+    ValidPayloadAttestation(W, Arc<PayloadAttestationMessage>),
     PrepareExecutionPayload(Slot, ExecutionBlockHash, ExecutionBlockHash),
     Stop,
 }
