@@ -2244,6 +2244,19 @@ impl<P: Preset> Network<P> {
                 self.controller
                     .on_gossip_payload_attestation(payload_attestation_message, gossip_id);
             }
+            PubsubMessage::ExecutionPayloadBid(payload_bid) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_gossip_object(&["execution_payload_bid"]);
+                }
+
+                trace_with_peers!(
+                    "received signed execution payload bid as gossip: \
+                    {payload_bid:?} from {source}"
+                );
+
+                self.controller
+                    .on_gossip_execution_payload_bid(payload_bid, GossipId { source, message_id });
+            }
             PubsubMessage::LightClientFinalityUpdate(_) => {
                 debug_with_peers!("received light client finality update as gossip");
             }

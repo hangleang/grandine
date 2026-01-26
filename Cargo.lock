@@ -5349,6 +5349,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arithmetic",
+ "bls",
  "clock",
  "crossbeam-skiplist",
  "derivative",

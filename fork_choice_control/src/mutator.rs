@@ -36,10 +36,10 @@ use fork_choice_store::{
     AggregateAndProofAction, ApplyBlockChanges, ApplyTickChanges, AttestationAction,
     AttestationItem, AttestationOrigin, AttestationValidationError, AttesterSlashingOrigin,
     BlobSidecarAction, BlobSidecarOrigin, BlockAction, BlockOrigin, ChainLink,
-    DataColumnSidecarAction, DataColumnSidecarOrigin, Error, PayloadAction,
-    PayloadAttestationAction, PayloadAttestationItem, PayloadAttestationOrigin,
-    PayloadAttestationValidationError, StateCacheProcessor, Store, ValidAttestation,
-    ValidPayloadAttestation,
+    DataColumnSidecarAction, DataColumnSidecarOrigin, Error, ExecutionPayloadBidAction,
+    ExecutionPayloadBidOrigin, PayloadAction, PayloadAttestationAction, PayloadAttestationItem,
+    PayloadAttestationOrigin, PayloadAttestationValidationError, StateCacheProcessor, Store,
+    ValidAttestation, ValidPayloadAttestation,
 };
 use futures::channel::{mpsc::Sender as MultiSender, oneshot::Sender as OneshotSender};
 use helper_functions::{accessors, misc, predicates, verifier::NullVerifier};
@@ -322,6 +322,9 @@ where
                     wait_group,
                     results,
                 } => self.handle_payload_attestation_batch(&wait_group, results)?,
+                MutatorMessage::PayloadBid { result, origin } => {
+                    self.handle_payload_bid(result, origin)
+                }
                 MutatorMessage::PreprocessedBeaconState { state } => {
                     self.prepare_execution_payload_for_next_slot(&state);
                 }
@@ -1961,6 +1964,57 @@ where
         }
 
         Ok(())
+    }
+
+    fn handle_payload_bid(
+        &mut self,
+        result: Result<ExecutionPayloadBidAction>,
+        origin: ExecutionPayloadBidOrigin,
+    ) {
+        match result {
+            Ok(ExecutionPayloadBidAction::Accept(payload_bid)) => {
+                trace_with_peers!("payload bid accepted (payload_bid: {payload_bid:?})");
+
+                self.event_channels
+                    .send_execution_payload_bid_event(payload_bid.message);
+
+                let (gossip_id, sender) = origin.split();
+
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                }
+
+                reply_to_http_api(sender, Ok(ValidationOutcome::Accept));
+
+                self.store_mut().apply_execution_payload_bid(*payload_bid);
+
+                self.update_store_snapshot();
+            }
+            Ok(ExecutionPayloadBidAction::Ignore(publishable)) => {
+                let (gossip_id, sender) = origin.split();
+
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Ignore(gossip_id));
+                }
+
+                reply_to_http_api(sender, Ok(ValidationOutcome::Ignore(publishable)));
+            }
+            Err(error) => {
+                let source = error.to_string();
+                warn_with_peers!("payload bid rejected (error: {error:?})",);
+
+                let (gossip_id, sender) = origin.split();
+
+                if gossip_id.is_some() {
+                    self.send_to_p2p(P2pMessage::Reject(
+                        gossip_id,
+                        MutatorRejectionReason::InvalidPayloadBid,
+                    ));
+                }
+
+                reply_to_http_api(sender, Err(anyhow!(source)));
+            }
+        }
     }
 
     fn handle_payload_attestation_batch(
