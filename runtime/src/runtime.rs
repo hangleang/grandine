@@ -1266,6 +1266,7 @@ pub fn run(parsed_args: GrandineArgs) -> Result<()> {
         backfill_custody_groups,
         sync_without_reconstruction,
         custody_mode,
+        enable_payload_build,
         ..
     } = config;
 
@@ -1304,6 +1305,7 @@ pub fn run(parsed_args: GrandineArgs) -> Result<()> {
         keystore_storage_password_file,
         backfill_custody_groups,
         custody_mode,
+        enable_payload_build,
     });
 
     let store_config = StoreConfig {

@@ -1336,20 +1336,27 @@ pub async fn blobs<P: Preset, W: Wait>(
     let max_blobs_per_block = controller.chain_config().max_blobs_per_block(epoch);
 
     let requested_indices = if let Some(versioned_hashes) = query.versioned_hashes {
-        let Some(kzg_commitments) = block
-            .message()
-            .body()
-            .with_blob_kzg_commitments()
-            .map(BlockBodyWithBlobKzgCommitments::blob_kzg_commitments)
-        else {
+        let kzg_commitments_opt = if version >= Phase::Gloas {
+            controller
+                .execution_payload_envelope_by_root(block_root)?
+                .map(|envelope| envelope.blob_kzg_commitments().clone())
+        } else {
+            block
+                .message()
+                .body()
+                .with_blob_kzg_commitments()
+                .map(BlockBodyWithBlobKzgCommitments::blob_kzg_commitments)
+                .cloned()
+        };
+
+        let Some(kzg_commitments) = kzg_commitments_opt else {
             return Ok(EthResponse::json_or_ssz(DynamicList::empty(), &headers)?
                 .execution_optimistic(status.is_optimistic())
                 .finalized(finalized));
         };
 
         let block_versioned_hashes = kzg_commitments
-            .iter()
-            .copied()
+            .into_iter()
             .map(misc::kzg_commitment_to_versioned_hash)
             .collect::<Vec<_>>();
 
@@ -2312,13 +2319,14 @@ pub async fn beacon_events<P: Preset>(
                 Event::ChainReorg(data) => ssevent.json_data(data),
                 Event::ContributionAndProof(data) => ssevent.json_data(data),
                 Event::DataColumnSidecar(data) => ssevent.json_data(data),
+                Event::ExecutionPayloadBid(data) => ssevent.json_data(data),
+                Event::ExecutionPayloadAvailable(data) => ssevent.json_data(data),
                 Event::FinalizedCheckpoint(data) => ssevent.json_data(data),
                 Event::Head(data) => ssevent.json_data(data),
                 Event::PayloadAttestation(data) => ssevent.json_data(data),
                 Event::PayloadAttributes(data) => ssevent.json_data(data),
                 Event::ProposerSlashing(data) => ssevent.json_data(data),
                 Event::VoluntaryExit(data) => ssevent.json_data(data),
-                Event::ExecutionPayloadBid(data) => ssevent.json_data(data),
             }
             .map_err(Into::into)
         })
@@ -2930,6 +2938,7 @@ pub async fn validator_block_v3<P: Preset, W: Wait>(
             disable_blockprint_graffiti: validator_config.disable_blockprint_graffiti,
             skip_randao_verification,
             builder_boost_factor,
+            enable_payload_build: false,
         },
     );
 

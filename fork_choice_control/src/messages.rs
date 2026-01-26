@@ -12,7 +12,8 @@ use fork_choice_store::{
     AggregateAndProofOrigin, AttestationAction, AttestationItem, AttestationValidationError,
     AttesterSlashingOrigin, BlobSidecarAction, BlobSidecarOrigin, BlockAction, BlockOrigin,
     ChainLink, DataColumnSidecarAction, DataColumnSidecarOrigin, ExecutionPayloadBidAction,
-    ExecutionPayloadBidOrigin, PayloadAttestationAction, PayloadAttestationValidationError,
+    ExecutionPayloadBidOrigin, ExecutionPayloadEnvelopeAction, ExecutionPayloadEnvelopeOrigin,
+    PayloadAttestationAction, PayloadAttestationValidationError,
 };
 use logging::debug_with_peers;
 use serde::Serialize;
@@ -23,7 +24,8 @@ use types::{
     },
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
-    gloas::containers::PayloadAttestationMessage,
+    gloas::containers::{PayloadAttestationMessage, SignedExecutionPayloadEnvelope},
+    nonstandard::BlockOrEnvelope,
     phase0::{
         containers::Checkpoint,
         primitives::{ExecutionBlockHash, H256, Slot, ValidatorIndex},
@@ -154,6 +156,16 @@ pub enum MutatorMessage<P: Preset, W> {
         persisted_data_column_ids: Vec<DataColumnIdentifier>,
         slot: Slot,
     },
+    ExecutionPayloadEnvelope {
+        wait_group: W,
+        result: Result<ExecutionPayloadEnvelopeAction<P>>,
+        origin: ExecutionPayloadEnvelopeOrigin,
+        submission_time: Instant,
+    },
+    FinishedPersistingExecutionPayloadEnvelopes {
+        wait_group: W,
+        persisted_block_roots: Vec<H256>,
+    },
     PayloadAttestation {
         wait_group: W,
         result: VerifyPayloadAttestationResult<P>,
@@ -198,7 +210,7 @@ pub enum MutatorMessage<P: Preset, W> {
     ReconstructedMissingColumns {
         wait_group: W,
         block_root: H256,
-        block: Arc<SignedBeaconBlock<P>>,
+        block_or_envelope: BlockOrEnvelope<P>,
         data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
     },
 }
@@ -249,6 +261,13 @@ pub enum PoolMessage<P: Preset, W> {
         block_root: H256,
         block: Arc<SignedBeaconBlock<P>>,
         origin: BlockOrigin,
+        slot: Slot,
+    },
+    ReconstructDataColumnsForEnvelope {
+        wait_group: W,
+        block_root: H256,
+        envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        origin: ExecutionPayloadEnvelopeOrigin,
         slot: Slot,
     },
 }

@@ -9,7 +9,8 @@ use execution_engine::PayloadStatusV1;
 use fork_choice_store::{
     AggregateAndProofAction, AggregateAndProofOrigin, AttestationAction, AttestationItem,
     AttestationValidationError, BlobSidecarOrigin, BlockOrigin, ChainLink, DataColumnSidecarOrigin,
-    PayloadAttestationAction, PayloadAttestationItem, PayloadAttestationValidationError,
+    ExecutionPayloadEnvelopeOrigin, PayloadAttestationAction, PayloadAttestationItem,
+    PayloadAttestationValidationError,
 };
 use scc::HashMap as SccHashMap;
 use serde::Serialize;
@@ -23,6 +24,7 @@ use types::{
         primitives::BlobIndex,
     },
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
+    gloas::containers::SignedExecutionPayloadEnvelope,
     phase0::primitives::{Slot, ValidatorIndex},
     preset::Preset,
 };
@@ -41,6 +43,7 @@ pub struct Delayed<P: Preset> {
     pub payload_attestations: Vec<PayloadAttestationItem<P>>,
     pub blob_sidecars: Vec<PendingBlobSidecar<P>>,
     pub data_column_sidecars: Vec<PendingDataColumnSidecar<P>>,
+    pub execution_payload_envelopes: Vec<PendingExecutionPayloadEnvelope<P>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -98,6 +101,7 @@ impl<P: Preset> Delayed<P> {
             payload_attestations,
             blob_sidecars,
             data_column_sidecars,
+            execution_payload_envelopes,
         } = self;
 
         blocks.is_empty()
@@ -107,6 +111,7 @@ impl<P: Preset> Delayed<P> {
             && payload_attestations.is_empty()
             && blob_sidecars.is_empty()
             && data_column_sidecars.is_empty()
+            && execution_payload_envelopes.is_empty()
     }
 }
 
@@ -175,6 +180,13 @@ pub struct PendingDataColumnSidecar<P: Preset> {
     pub submission_time: Instant,
 }
 
+#[derive(Debug)]
+pub struct PendingExecutionPayloadEnvelope<P: Preset> {
+    pub execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+    pub origin: ExecutionPayloadEnvelopeOrigin,
+    pub submission_time: Instant,
+}
+
 pub struct VerifyAggregateAndProofResult<P: Preset> {
     pub result: Result<AggregateAndProofAction<P>>,
     pub origin: AggregateAndProofOrigin<GossipId>,
@@ -201,6 +213,7 @@ pub enum MutatorRejectionReason {
     InvalidDataColumnSidecar {
         data_column_identifier: DataColumnIdentifier,
     },
+    InvalidExecutionPayloadEnvelope,
     InvalidPayloadAttestation,
     InvalidPayloadBid,
 }
@@ -249,6 +262,14 @@ pub enum BlockDataColumnAvailability {
     AnyPending,
     Missing(Vec<ColumnIndex>),
     Irrelevant,
+}
+
+#[derive(Debug)]
+pub enum EnvelopeDataColumnAvailability {
+    Complete,
+    CompleteWithReconstruction,
+    AnyPending,
+    Missing(Vec<ColumnIndex>),
 }
 
 pub type SidecarsPendingReconstruction<P> =

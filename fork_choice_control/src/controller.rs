@@ -24,7 +24,8 @@ use execution_engine::{ExecutionEngine, PayloadStatusV1};
 use fork_choice_store::{
     AggregateAndProofOrigin, AttestationItem, AttestationOrigin, AttesterSlashingOrigin,
     BlobSidecarOrigin, BlockOrigin, DataColumnSidecarOrigin, ExecutionPayloadBidOrigin,
-    PayloadAttestationItem, PayloadAttestationOrigin, StateCacheProcessor, Store, StoreConfig,
+    ExecutionPayloadEnvelopeOrigin, PayloadAttestationItem, PayloadAttestationOrigin,
+    StateCacheProcessor, Store, StoreConfig,
 };
 use futures::channel::{mpsc::Sender as MultiSender, oneshot::Sender as OneshotSender};
 use genesis::AnchorCheckpointProvider;
@@ -43,8 +44,10 @@ use types::{
     config::Config as ChainConfig,
     deneb::containers::BlobSidecar,
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
-    gloas::containers::{PayloadAttestationMessage, SignedExecutionPayloadBid},
-    nonstandard::ValidationOutcome,
+    gloas::containers::{
+        PayloadAttestationMessage, SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+    },
+    nonstandard::{BlockOrEnvelope, ValidationOutcome},
     phase0::primitives::{ExecutionBlockHash, H256, Slot, SubnetId},
     preset::Preset,
     traits::SignedBeaconBlock as _,
@@ -67,7 +70,8 @@ use crate::{
     tasks::{
         AggregateAndProofTask, AttestationTask, AttesterSlashingTask, BlobSidecarTask, BlockTask,
         BlockVerifyForGossipTask, DataColumnSidecarTask, ExecutionPayloadBidTask,
-        PayloadAttestationBatchTask, PayloadAttestationTask, StateAtSlotCacheFlushTask,
+        ExecutionPayloadEnvelopeTask, PayloadAttestationBatchTask, PayloadAttestationTask,
+        StateAtSlotCacheFlushTask,
     },
     thread_pool::{Spawn, ThreadPool},
     unbounded_sink::UnboundedSink,
@@ -350,6 +354,16 @@ where
         .await
     }
 
+    pub fn on_own_execution_payload_envelope(
+        &self,
+        execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+    ) {
+        self.spawn_execution_payload_envelope_task(
+            execution_payload_envelope,
+            ExecutionPayloadEnvelopeOrigin::Own,
+        );
+    }
+
     #[instrument(
         parent = None,
         skip_all
@@ -402,6 +416,17 @@ where
             payload_status,
         }
         .send(&self.mutator_tx);
+    }
+
+    pub fn on_gossip_execution_payload(
+        &self,
+        execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        gossip_id: GossipId,
+    ) {
+        self.spawn_execution_payload_envelope_task(
+            execution_payload_envelope,
+            ExecutionPayloadEnvelopeOrigin::Gossip(gossip_id),
+        );
     }
 
     pub fn on_notified_new_payload(
@@ -635,6 +660,17 @@ where
         .await
     }
 
+    pub fn on_requested_execution_payload_envelope(
+        &self,
+        execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        peer_id: PeerId,
+    ) {
+        self.spawn_execution_payload_envelope_task(
+            execution_payload_envelope,
+            ExecutionPayloadEnvelopeOrigin::Requested(peer_id),
+        );
+    }
+
     pub fn on_payload_attestation(&self, payload_attestation: PayloadAttestationItem<P>) {
         self.spawn(PayloadAttestationTask {
             store_snapshot: self.owned_store_snapshot(),
@@ -683,13 +719,13 @@ where
         &self,
         wait_group: W,
         block_root: H256,
-        block: Arc<SignedBeaconBlock<P>>,
+        block_or_envelope: BlockOrEnvelope<P>,
         data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
     ) {
         MutatorMessage::ReconstructedMissingColumns {
             wait_group,
             block_root,
-            block,
+            block_or_envelope,
             data_column_sidecars,
         }
         .send(&self.mutator_tx)
@@ -715,6 +751,14 @@ where
         blocks: impl IntoIterator<Item = Arc<SignedBeaconBlock<P>>>,
     ) -> Result<()> {
         self.storage.store_back_sync_blocks(blocks)
+    }
+
+    pub fn store_back_sync_execution_payload_envelopes(
+        &self,
+        execution_payload_envelopes: impl IntoIterator<Item = Arc<SignedExecutionPayloadEnvelope<P>>>,
+    ) -> Result<()> {
+        self.storage
+            .store_back_sync_execution_payload_envelopes(execution_payload_envelopes)
     }
 
     pub fn archive_back_sync_states(
@@ -858,6 +902,23 @@ where
             processing_timings: ProcessingTimings::new(),
             metrics: self.metrics.clone(),
             tracing_span: Span::current(),
+        })
+    }
+
+    fn spawn_execution_payload_envelope_task(
+        &self,
+        execution_payload_envelope: Arc<SignedExecutionPayloadEnvelope<P>>,
+        origin: ExecutionPayloadEnvelopeOrigin,
+    ) {
+        self.spawn(ExecutionPayloadEnvelopeTask {
+            store_snapshot: self.owned_store_snapshot(),
+            mutator_tx: self.owned_mutator_tx(),
+            wait_group: self.owned_wait_group(),
+            execution_payload_envelope,
+            state: None,
+            origin,
+            submission_time: Instant::now(),
+            metrics: self.metrics.clone(),
         })
     }
 

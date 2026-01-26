@@ -37,9 +37,10 @@ use fork_choice_store::{
     AttestationItem, AttestationOrigin, AttestationValidationError, AttesterSlashingOrigin,
     BlobSidecarAction, BlobSidecarOrigin, BlockAction, BlockOrigin, ChainLink,
     DataColumnSidecarAction, DataColumnSidecarOrigin, Error, ExecutionPayloadBidAction,
-    ExecutionPayloadBidOrigin, PayloadAction, PayloadAttestationAction, PayloadAttestationItem,
-    PayloadAttestationOrigin, PayloadAttestationValidationError, StateCacheProcessor, Store,
-    ValidAttestation, ValidPayloadAttestation,
+    ExecutionPayloadBidOrigin, ExecutionPayloadEnvelopeAction, ExecutionPayloadEnvelopeOrigin,
+    PayloadAction, PayloadAttestationAction, PayloadAttestationItem, PayloadAttestationOrigin,
+    PayloadAttestationValidationError, StateCacheProcessor, Store, ValidAttestation,
+    ValidPayloadAttestation,
 };
 use futures::channel::{mpsc::Sender as MultiSender, oneshot::Sender as OneshotSender};
 use helper_functions::{accessors, misc, predicates, verifier::NullVerifier};
@@ -58,8 +59,8 @@ use types::{
     combined::{BeaconState, DataColumnSidecar, ExecutionPayloadParams, SignedBeaconBlock},
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
-    gloas::containers::CombinedPayloadAttestation,
-    nonstandard::{PayloadStatus, Phase, RelativeEpoch, ValidationOutcome},
+    gloas::containers::{CombinedPayloadAttestation, SignedExecutionPayloadEnvelope},
+    nonstandard::{BlockOrEnvelope, PayloadStatus, Phase, RelativeEpoch, ValidationOutcome},
     phase0::{
         containers::Checkpoint,
         primitives::{ExecutionBlockHash, H256, Slot, ValidatorIndex},
@@ -77,18 +78,20 @@ use crate::{
         SyncMessage, ValidatorMessage,
     },
     misc::{
-        BlockBlobAvailability, BlockDataColumnAvailability, Delayed, MutatorRejectionReason,
-        PendingAggregateAndProof, PendingAttestation, PendingBlobSidecar, PendingBlock,
-        PendingChainLink, PendingDataColumnSidecar, ProcessingTimings, ReorgSource,
+        BlockBlobAvailability, BlockDataColumnAvailability, Delayed,
+        EnvelopeDataColumnAvailability, MutatorRejectionReason, PendingAggregateAndProof,
+        PendingAttestation, PendingBlobSidecar, PendingBlock, PendingChainLink,
+        PendingDataColumnSidecar, PendingExecutionPayloadEnvelope, ProcessingTimings, ReorgSource,
         VerifyAggregateAndProofResult, VerifyAttestationResult, VerifyPayloadAttestationResult,
         WaitingForCheckpointState,
     },
     storage::Storage,
     tasks::{
         AttestationTask, BlobSidecarTask, BlockAttestationsTask, BlockPayloadAttestationsTask,
-        BlockTask, CheckpointStateTask, DataColumnSidecarTask, PayloadAttestationTask,
-        PersistBlobSidecarsTask, PersistDataColumnSidecarsTask, PersistPubkeyCacheTask,
-        PreprocessStateTask, PruneStateCacheTask, RetryDataColumnSidecarTask,
+        BlockTask, CheckpointStateTask, DataColumnSidecarTask, ExecutionPayloadEnvelopeTask,
+        PayloadAttestationTask, PersistBlobSidecarsTask, PersistDataColumnSidecarsTask,
+        PersistExecutionPayloadEnvelopesTask, PersistPubkeyCacheTask, PreprocessStateTask,
+        PruneStateCacheTask, RetryDataColumnSidecarTask,
     },
     thread_pool::{Spawn, ThreadPool},
     unbounded_sink::UnboundedSink,
@@ -108,6 +111,7 @@ pub struct Mutator<P: Preset, E, W, TS, PS, LS, NS, SS, VS> {
     execution_engine: E,
     delayed_until_blobs: HashMap<H256, PendingBlock<P>>,
     delayed_until_block: HashMap<H256, Delayed<P>>,
+    delayed_until_data: HashMap<H256, PendingExecutionPayloadEnvelope<P>>,
     // We previously ignored objects that would have to be delayed more than one slot. This was
     // based on the assumption that one slot is enough to account for clock differences between
     // nodes. However, this meant that if the application lagged enough to miss multiple slot
@@ -188,6 +192,7 @@ where
             execution_engine,
             delayed_until_blobs: HashMap::new(),
             delayed_until_block: HashMap::new(),
+            delayed_until_data: HashMap::new(),
             delayed_until_slot: BTreeMap::new(),
             delayed_until_payload: HashMap::new(),
             delayed_until_state: HashMap::new(),
@@ -315,6 +320,26 @@ where
                         slot,
                     );
                 }
+                MutatorMessage::FinishedPersistingExecutionPayloadEnvelopes {
+                    wait_group,
+                    persisted_block_roots,
+                } => {
+                    self.handle_finish_persisting_execution_payload_envelopes(
+                        wait_group,
+                        persisted_block_roots,
+                    );
+                }
+                MutatorMessage::ExecutionPayloadEnvelope {
+                    wait_group,
+                    result,
+                    origin,
+                    submission_time,
+                } => self.handle_execution_payload_envelope(
+                    wait_group,
+                    result,
+                    origin,
+                    submission_time,
+                ),
                 MutatorMessage::PayloadAttestation { wait_group, result } => {
                     self.handle_payload_attestation(&wait_group, result)?
                 }
@@ -352,12 +377,12 @@ where
                 MutatorMessage::ReconstructedMissingColumns {
                     wait_group,
                     block_root,
-                    block,
+                    block_or_envelope,
                     data_column_sidecars,
                 } => self.handle_reconstructed_missing_columns(
                     &wait_group,
                     block_root,
-                    &block,
+                    block_or_envelope,
                     data_column_sidecars,
                 ),
             }
@@ -456,12 +481,29 @@ where
         if tick.is_end_of_interval() {
             let head = self.store.head();
 
-            // TODO: (gloas): get `execution_payload` from post-gloas payload envelope
-            if head.is_optimistic()
-                && let Some(execution_payload) = head.block.as_ref().clone().execution_payload()
-            {
-                // TODO: (gloas): get `blob_kzg_commitments` from post-gloas payload envelope
-                let params =
+            if head.is_optimistic() {
+                let payload_params_opt = if head.block.phase() >= Phase::Gloas {
+                    self.execution_payload_envelope_by_root(head.block_root)?
+                        .map(|envelope| {
+                            let versioned_hashes = envelope
+                                .blob_kzg_commitments()
+                                .iter()
+                                .copied()
+                                .map(misc::kzg_commitment_to_versioned_hash)
+                                .collect();
+
+                            let params = Some(ExecutionPayloadParams::Electra {
+                                versioned_hashes,
+                                parent_beacon_block_root: head.block.message().parent_root(),
+                                execution_requests: envelope.message.execution_requests.clone(),
+                            });
+
+                            (envelope.message.payload.clone().into(), params)
+                        })
+                } else if let Some(execution_payload) =
+                    head.block.as_ref().clone().execution_payload()
+                {
+                    let mut params = None;
                     if let Some(body) = head.block.message().body().with_blob_kzg_commitments() {
                         let versioned_hashes = body
                             .blob_kzg_commitments()
@@ -470,8 +512,7 @@ where
                             .map(misc::kzg_commitment_to_versioned_hash)
                             .collect();
 
-                        // TODO: (gloas): get `execution_requests` from post-gloas payload envelope
-                        if let Some(body) = body.with_execution_requests() {
+                        params = if let Some(body) = body.with_execution_requests() {
                             Some(ExecutionPayloadParams::Electra {
                                 versioned_hashes,
                                 parent_beacon_block_root: head.block.message().parent_root(),
@@ -483,16 +524,21 @@ where
                                 parent_beacon_block_root: head.block.message().parent_root(),
                             })
                         }
-                    } else {
-                        None
-                    };
+                    }
 
-                self.execution_engine.notify_new_payload(
-                    head.block_root,
-                    execution_payload,
-                    params,
-                    None,
-                )?;
+                    Some((execution_payload, params))
+                } else {
+                    None
+                };
+
+                if let Some((execution_payload, params)) = payload_params_opt {
+                    self.execution_engine.notify_new_payload(
+                        head.block_root,
+                        execution_payload,
+                        params,
+                        None,
+                    )?;
+                }
             }
         }
 
@@ -832,7 +878,7 @@ where
 
                                 self.request_blobs_from_execution_engine(
                                     EngineGetBlobsV2Params {
-                                        block_or_sidecar: pending_block.block.clone_arc().into(),
+                                        block_or_data: pending_block.block.clone_arc().into(),
                                         data_column_identifiers,
                                     }
                                     .into(),
@@ -1694,7 +1740,7 @@ where
 
                         self.request_blobs_from_execution_engine(
                             EngineGetBlobsV2Params {
-                                block_or_sidecar: data_column_sidecar.clone_arc().into(),
+                                block_or_data: data_column_sidecar.clone_arc().into(),
                                 data_column_identifiers,
                             }
                             .into(),
@@ -1852,6 +1898,285 @@ where
                 ));
 
                 reply_to_http_api(sender, Err(error));
+            }
+        }
+    }
+
+    #[expect(clippy::too_many_lines)]
+    fn handle_execution_payload_envelope(
+        &mut self,
+        wait_group: W,
+        result: Result<ExecutionPayloadEnvelopeAction<P>>,
+        origin: ExecutionPayloadEnvelopeOrigin,
+        submission_time: Instant,
+    ) {
+        match result {
+            Ok(ExecutionPayloadEnvelopeAction::Accept(execution_payload_envelope)) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["accepted"]);
+                }
+
+                trace_with_peers!(
+                    "execution payload envelope accepted (beacon_block_root: {:?}, slot: {})",
+                    execution_payload_envelope.message.beacon_block_root,
+                    execution_payload_envelope.message.slot
+                );
+
+                if origin.should_generate_event() {
+                    self.event_channels.send_execution_payload_available_event(
+                        execution_payload_envelope.message.slot,
+                        execution_payload_envelope.message.beacon_block_root,
+                    );
+                }
+
+                let (gossip_id, sender) = origin.split();
+
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                }
+
+                reply_payload_envelope_validation_result_to_http_api(
+                    sender,
+                    Ok(ValidationOutcome::Accept),
+                );
+            }
+            Ok(ExecutionPayloadEnvelopeAction::Ignore(publishable)) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["ignored"]);
+                }
+
+                let (gossip_id, sender) = origin.split();
+
+                if let Some(gossip_id) = gossip_id {
+                    self.send_to_p2p(P2pMessage::Ignore(gossip_id));
+                }
+
+                reply_payload_envelope_validation_result_to_http_api(
+                    sender,
+                    Ok(ValidationOutcome::Ignore(publishable)),
+                );
+            }
+            Ok(ExecutionPayloadEnvelopeAction::DelayUntilBeaconBlock(
+                execution_payload_envelope,
+                beacon_block_root,
+            )) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["delayed_until_block"]);
+                }
+
+                self.delay_execution_payload_envelope_until_block(
+                    wait_group,
+                    PendingExecutionPayloadEnvelope {
+                        execution_payload_envelope,
+                        origin,
+                        submission_time,
+                    },
+                    beacon_block_root,
+                );
+            }
+            Ok(ExecutionPayloadEnvelopeAction::DelayUntilState(
+                execution_payload_envelope,
+                beacon_block_root,
+                slot,
+            )) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["delayed_until_state"]);
+                }
+
+                let pending_envelope = PendingExecutionPayloadEnvelope {
+                    execution_payload_envelope,
+                    origin,
+                    submission_time,
+                };
+
+                if let Some(state) =
+                    self.state_cache
+                        .existing_state_at_slot(&self.store, beacon_block_root, slot)
+                {
+                    self.retry_execution_payload_envelope(
+                        wait_group,
+                        pending_envelope,
+                        Some(state),
+                    );
+                } else {
+                    debug_with_peers!(
+                        "execution payload envelope delayed until state at same slot is ready \
+                         (block_root: {beacon_block_root:?}, slot: {slot})",
+                    );
+
+                    self.delayed_until_state
+                        .entry((beacon_block_root, slot))
+                        .or_default()
+                        .execution_payload_envelopes
+                        .push(pending_envelope);
+                }
+            }
+            Ok(ExecutionPayloadEnvelopeAction::DelayUntilData(
+                execution_payload_envelope,
+                state,
+            )) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["delayed_until_data"]);
+                }
+
+                let slot = execution_payload_envelope.slot();
+                let block_root = execution_payload_envelope.block_root();
+                let pending_payload_envelope = PendingExecutionPayloadEnvelope {
+                    execution_payload_envelope,
+                    origin,
+                    submission_time,
+                };
+
+                let envelope_data_column_availability = self.envelope_data_column_availability(
+                    &pending_payload_envelope.execution_payload_envelope,
+                    self.delayed_until_state
+                        .get(&(block_root, state.slot()))
+                        .iter()
+                        .flat_map(|delayed| delayed.data_column_sidecars.iter())
+                        .map(|pending| pending.data_column_sidecar.as_ref()),
+                );
+
+                debug_with_peers!(
+                    "data availability for block: {:?} with origin: {:?} at slot: {}: {envelope_data_column_availability:?}",
+                    block_root,
+                    pending_payload_envelope.origin,
+                    slot,
+                );
+
+                // Reuse `BlockDataColumnAvailability` state for DA of payload envelope since there
+                // is no significant changes
+                match envelope_data_column_availability {
+                    EnvelopeDataColumnAvailability::Complete => {
+                        self.retry_execution_payload_envelope(
+                            wait_group,
+                            pending_payload_envelope,
+                            None,
+                        );
+                    }
+                    EnvelopeDataColumnAvailability::AnyPending => {
+                        self.delay_execution_payload_envelope_until_data(
+                            block_root,
+                            pending_payload_envelope,
+                        );
+
+                        self.take_delayed_until_state(block_root, state.slot())
+                            .unwrap_or_default()
+                            .data_column_sidecars
+                            .into_iter()
+                            .for_each(|pending_data_column| {
+                                self.retry_data_column_sidecar(
+                                    wait_group.clone(),
+                                    pending_data_column,
+                                    Some(state.clone_arc()),
+                                );
+                            });
+                    }
+                    EnvelopeDataColumnAvailability::CompleteWithReconstruction => {
+                        if let Some(gossip_id) = pending_payload_envelope.origin.gossip_id() {
+                            self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                        }
+
+                        if self
+                            .store
+                            .indices_of_missing_data_columns_for_envelope(
+                                &pending_payload_envelope.execution_payload_envelope,
+                            )
+                            .is_empty()
+                        {
+                            self.retry_execution_payload_envelope(
+                                wait_group,
+                                pending_payload_envelope,
+                                None,
+                            );
+                        } else {
+                            if !matches!(
+                                pending_payload_envelope.origin,
+                                ExecutionPayloadEnvelopeOrigin::Own
+                            ) && !self.store.is_sidecars_construction_started(&block_root)
+                            {
+                                self.send_to_pool(PoolMessage::ReconstructDataColumnsForEnvelope {
+                                    wait_group,
+                                    block_root,
+                                    envelope: pending_payload_envelope
+                                        .execution_payload_envelope
+                                        .clone_arc(),
+                                    origin: pending_payload_envelope.origin.clone(),
+                                    slot,
+                                })
+                            }
+
+                            self.delay_execution_payload_envelope_until_data(
+                                block_root,
+                                pending_payload_envelope,
+                            );
+                        }
+                    }
+                    EnvelopeDataColumnAvailability::Missing(missing_column_indices) => {
+                        debug_with_peers!(
+                            "payload envelope delayed until sufficient data column sidecars are available \
+                             (missing columns: {missing_column_indices:?}, block root: {block_root:?})",
+                        );
+
+                        if let Some(gossip_id) = pending_payload_envelope.origin.gossip_id() {
+                            self.send_to_p2p(P2pMessage::Accept(gossip_id));
+                        }
+
+                        let pending_payload_envelope =
+                            reply_delayed_payload_envelope_validation_result(
+                                pending_payload_envelope,
+                                Ok(ValidationOutcome::Ignore(false)),
+                            );
+
+                        if self.store.is_forward_synced()
+                            && !self.store.has_requested_blobs_from_el(&block_root)
+                            && !self.store.is_sidecars_construction_started(&block_root)
+                        {
+                            self.store_mut()
+                                .mark_requested_blobs_from_el(block_root, slot);
+                            self.update_store_snapshot();
+
+                            let data_column_identifiers = missing_column_indices
+                                .into_iter()
+                                .map(|index| DataColumnIdentifier { block_root, index })
+                                .collect_vec();
+
+                            self.request_blobs_from_execution_engine(
+                                EngineGetBlobsV2Params {
+                                    block_or_data: pending_payload_envelope
+                                        .execution_payload_envelope
+                                        .clone_arc()
+                                        .into(),
+                                    data_column_identifiers,
+                                }
+                                .into(),
+                            );
+                        }
+
+                        self.delay_execution_payload_envelope_until_data(
+                            block_root,
+                            pending_payload_envelope,
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(metrics) = self.metrics.as_ref() {
+                    metrics.register_mutator_execution_payload_envelope(&["rejected"]);
+                }
+
+                let source = error.to_string();
+                warn_with_peers!("execution payload envelope rejected (error: {error:?})");
+
+                let (gossip_id, sender) = origin.split();
+
+                if gossip_id.is_some() {
+                    self.send_to_p2p(P2pMessage::Reject(
+                        gossip_id,
+                        MutatorRejectionReason::InvalidExecutionPayloadEnvelope,
+                    ));
+                }
+
+                reply_payload_envelope_validation_result_to_http_api(sender, Err(anyhow!(source)));
             }
         }
     }
@@ -2115,14 +2440,40 @@ where
         self.update_store_snapshot();
     }
 
+    fn handle_finish_persisting_execution_payload_envelopes(
+        &mut self,
+        wait_group: W,
+        persisted_block_roots: Vec<H256>,
+    ) {
+        self.store_mut()
+            .mark_persisted_envelopes(persisted_block_roots);
+
+        self.update_store_snapshot();
+
+        if self.store.has_unpersisted_envelopes() {
+            self.spawn(PersistExecutionPayloadEnvelopesTask {
+                store_snapshot: self.owned_store(),
+                storage: self.storage.clone_arc(),
+                mutator_tx: self.owned_mutator_tx(),
+                wait_group,
+                metrics: self.metrics.clone(),
+            });
+        }
+    }
+
     fn handle_reconstructed_missing_columns(
         &mut self,
         wait_group: &W,
         block_root: H256,
-        block: &SignedBeaconBlock<P>,
+        block_or_envelope: BlockOrEnvelope<P>,
         mut data_column_sidecars: Vec<Arc<DataColumnSidecar<P>>>,
     ) {
-        let missing_indices = self.store.indices_of_missing_data_columns(block);
+        let missing_indices = match block_or_envelope {
+            BlockOrEnvelope::Block(block) => self.store.indices_of_missing_data_columns(&block),
+            BlockOrEnvelope::Envelope(envelope) => self
+                .store
+                .indices_of_missing_data_columns_for_envelope(&envelope),
+        };
 
         if missing_indices.is_empty() {
             return;
@@ -2594,10 +2945,12 @@ where
             .then(|| {
                 let delayed = self.prune_delayed_until_block();
                 let delayed_until_blobs = self.prune_delayed_until_blobs();
+                let delayed_until_data = self.prune_delayed_until_data();
                 let waiting = self.prune_waiting_for_checkpoint_states();
                 delayed
                     .into_iter()
                     .chain(delayed_until_blobs)
+                    .chain(delayed_until_data)
                     .chain(waiting)
             })
             .into_iter()
@@ -2771,6 +3124,17 @@ where
                 "unable to send reconstructed data column sidecar to pending requests: \
                 {identifier:?}, error: {error:?}",
             )
+        }
+
+        // Once all sampling columns are available, retry pending payload envelope
+        if accepted_data_columns == self.store.sampling_columns_count()
+            && let Some(pending_payload_envelope) = self.take_delayed_until_data(block_root)
+        {
+            self.retry_execution_payload_envelope(
+                wait_group.clone(),
+                pending_payload_envelope,
+                None,
+            );
         }
 
         self.event_channels
@@ -3020,6 +3384,48 @@ where
         }
     }
 
+    fn delay_execution_payload_envelope_until_block(
+        &mut self,
+        wait_group: W,
+        pending_execution_payload_envelope: PendingExecutionPayloadEnvelope<P>,
+        beacon_block_root: H256,
+    ) {
+        if self.store.contains_block(beacon_block_root) {
+            self.retry_execution_payload_envelope(
+                wait_group,
+                pending_execution_payload_envelope,
+                None,
+            );
+        } else {
+            trace_with_peers!(
+                "execution payload envelope delayed until block \
+                 (beacon_block_root: {beacon_block_root:?})",
+            );
+
+            let peer_id = pending_execution_payload_envelope
+                .origin
+                .gossip_id_ref()
+                .map(|gossip_id| gossip_id.source);
+
+            self.send_to_p2p(P2pMessage::BlockNeeded(beacon_block_root, peer_id));
+
+            self.delayed_until_block
+                .entry(beacon_block_root)
+                .or_default()
+                .execution_payload_envelopes
+                .push(pending_execution_payload_envelope);
+        }
+    }
+
+    fn delay_execution_payload_envelope_until_data(
+        &mut self,
+        beacon_block_root: H256,
+        pending_execution_payload_envelope: PendingExecutionPayloadEnvelope<P>,
+    ) {
+        self.delayed_until_data
+            .insert(beacon_block_root, pending_execution_payload_envelope);
+    }
+
     fn delay_payload_status_until_block(
         &mut self,
         beacon_block_root: H256,
@@ -3221,6 +3627,13 @@ where
         self.delayed_until_state.remove(&(block_root, slot))
     }
 
+    fn take_delayed_until_data(
+        &mut self,
+        block_root: H256,
+    ) -> Option<PendingExecutionPayloadEnvelope<P>> {
+        self.delayed_until_data.remove(&block_root)
+    }
+
     // `wait_group` is a reference not just to pass Clippy lints but for correctness as well.
     // The referenced value must not be dropped before the current message is handled.
     fn retry_delayed(&self, delayed: Delayed<P>, wait_group: &W) {
@@ -3232,6 +3645,7 @@ where
             aggregates,
             attestations,
             payload_attestations,
+            execution_payload_envelopes,
             blob_sidecars,
             data_column_sidecars,
         } = delayed;
@@ -3250,6 +3664,14 @@ where
 
         for pending_payload_attestation in payload_attestations {
             self.retry_payload_attestation(wait_group.clone(), pending_payload_attestation);
+        }
+
+        for pending_execution_payload_envelope in execution_payload_envelopes {
+            self.retry_execution_payload_envelope(
+                wait_group.clone(),
+                pending_execution_payload_envelope,
+                None,
+            );
         }
 
         for pending_blob_sidecar in blob_sidecars {
@@ -3322,6 +3744,32 @@ where
             mutator_tx: self.owned_mutator_tx(),
             wait_group,
             payload_attestation,
+            metrics: self.metrics.clone(),
+        });
+    }
+
+    fn retry_execution_payload_envelope(
+        &self,
+        wait_group: W,
+        pending_execution_payload_envelope: PendingExecutionPayloadEnvelope<P>,
+        state: Option<Arc<BeaconState<P>>>,
+    ) {
+        trace_with_peers!("retrying delayed execution payload envelope");
+
+        let PendingExecutionPayloadEnvelope {
+            execution_payload_envelope,
+            origin,
+            submission_time,
+        } = pending_execution_payload_envelope;
+
+        self.spawn(ExecutionPayloadEnvelopeTask {
+            store_snapshot: self.owned_store(),
+            mutator_tx: self.owned_mutator_tx(),
+            wait_group,
+            execution_payload_envelope,
+            state,
+            origin,
+            submission_time,
             metrics: self.metrics.clone(),
         });
     }
@@ -3454,6 +3902,7 @@ where
                 aggregates,
                 attestations,
                 payload_attestations,
+                execution_payload_envelopes,
                 blob_sidecars,
                 data_column_sidecars,
             } = delayed;
@@ -3505,6 +3954,14 @@ where
                     .filter_map(|pending| pending.origin.gossip_id()),
             );
 
+            gossip_ids.extend(
+                execution_payload_envelopes
+                    .extract_if(.., |pending| {
+                        pending.execution_payload_envelope.message.slot - 1 <= finalized_slot
+                    })
+                    .filter_map(|pending| pending.origin.gossip_id()),
+            );
+
             // TODO(feature/deneb): Does the condition and comment apply to blob sidecars?
             gossip_ids.extend(
                 blob_sidecars
@@ -3526,6 +3983,27 @@ where
 
             !delayed.is_empty()
         });
+
+        gossip_ids
+    }
+
+    fn prune_delayed_until_data(&mut self) -> Vec<GossipId> {
+        let finalized_slot = self.store.finalized_slot();
+
+        let mut gossip_ids = vec![];
+
+        self.delayed_until_data
+            .retain(|_, pending_payload_envelope| {
+                if pending_payload_envelope.execution_payload_envelope.slot() > finalized_slot {
+                    return true;
+                }
+
+                if let Some(gossip_id) = pending_payload_envelope.origin.gossip_id_ref() {
+                    gossip_ids.push(gossip_id.clone());
+                }
+
+                false
+            });
 
         gossip_ids
     }
@@ -3816,6 +4294,19 @@ where
                     }
                 }
 
+                debug_with_peers!("pruning old execution payload envelopes from storage up to slot {blocks_up_to_slot}…");
+
+                match storage.prune_old_execution_payload_envelopes(blocks_up_to_slot) {
+                    Ok(()) => {
+                        debug_with_peers!(
+                            "pruned old execution payload envelopes from storage up to slot {blocks_up_to_slot}"
+                        );
+                    }
+                    Err(error) => {
+                        error_with_peers!("pruning old execution payload envelopes from storage failed: {error:?}")
+                    }
+                }
+
                 debug_with_peers!("pruning old blocks and states from storage up to slot {blocks_up_to_slot}…");
 
                 match storage.prune_old_blocks_and_states(blocks_up_to_slot) {
@@ -3957,6 +4448,13 @@ where
                 &type_name,
                 "delayed_until_block",
                 self.delayed_until_block.len(),
+            );
+
+            metrics.set_collection_length(
+                module_path!(),
+                &type_name,
+                "delayed_until_data",
+                self.delayed_until_data.len(),
             );
 
             metrics.set_collection_length(
@@ -4176,6 +4674,56 @@ where
 
         BlockDataColumnAvailability::Missing(missing_indices)
     }
+
+    fn envelope_data_column_availability<'column>(
+        &self,
+        envelope: &SignedExecutionPayloadEnvelope<P>,
+        mut pending_data_columns_for_block: impl Iterator<Item = &'column DataColumnSidecar<P>>,
+    ) -> EnvelopeDataColumnAvailability {
+        let missing_indices = self
+            .store
+            .indices_of_missing_data_columns_for_envelope(envelope);
+
+        if missing_indices.is_empty() {
+            return EnvelopeDataColumnAvailability::Complete;
+        }
+
+        let any_pending_columns = pending_data_columns_for_block.any(|data_column_sidecar| {
+            missing_indices.contains(&data_column_sidecar.index())
+                && data_column_sidecar.kzg_commitments() == envelope.blob_kzg_commitments()
+        });
+
+        if any_pending_columns {
+            return EnvelopeDataColumnAvailability::AnyPending;
+        }
+
+        let available_columns_count = self
+            .store
+            .sampling_columns_count()
+            .saturating_sub(missing_indices.len());
+
+        if available_columns_count * 2 >= P::NumberOfColumns::USIZE
+            && (self.store.is_forward_synced()
+                || !self.store.store_config().sync_without_reconstruction)
+        {
+            return EnvelopeDataColumnAvailability::CompleteWithReconstruction;
+        }
+
+        EnvelopeDataColumnAvailability::Missing(missing_indices)
+    }
+
+    fn execution_payload_envelope_by_root(
+        &self,
+        block_root: H256,
+    ) -> Result<Option<Arc<SignedExecutionPayloadEnvelope<P>>>> {
+        match self
+            .store
+            .cached_execution_payload_envelope_by_root(block_root)
+        {
+            Some(envelope) => Ok(Some(envelope.clone_arc())),
+            None => self.storage.execution_payload_envelope_by_root(block_root),
+        }
+    }
 }
 
 fn reply_to_http_api(
@@ -4190,6 +4738,17 @@ fn reply_to_http_api(
 }
 
 fn reply_block_validation_result_to_http_api(
+    sender: Option<MultiSender<Result<ValidationOutcome>>>,
+    reply: Result<ValidationOutcome>,
+) {
+    if let Some(mut sender) = sender
+        && let Err(reply) = sender.try_send(reply)
+    {
+        debug_with_peers!("reply to HTTP API failed because the receiver was dropped: {reply:?}");
+    }
+}
+
+fn reply_payload_envelope_validation_result_to_http_api(
     sender: Option<MultiSender<Result<ValidationOutcome>>>,
     reply: Result<ValidationOutcome>,
 ) {
@@ -4226,6 +4785,33 @@ fn reply_delayed_block_validation_result<P: Preset>(
             origin,
             processing_timings,
             tracing_span,
+        }
+    }
+}
+
+fn reply_delayed_payload_envelope_validation_result<P: Preset>(
+    pending_envelope: PendingExecutionPayloadEnvelope<P>,
+    reply: Result<ValidationOutcome>,
+) -> PendingExecutionPayloadEnvelope<P> {
+    let PendingExecutionPayloadEnvelope {
+        execution_payload_envelope,
+        origin,
+        submission_time,
+    } = pending_envelope;
+
+    if let ExecutionPayloadEnvelopeOrigin::Api(Some(sender)) = origin {
+        reply_payload_envelope_validation_result_to_http_api(Some(sender), reply);
+
+        PendingExecutionPayloadEnvelope {
+            execution_payload_envelope,
+            origin: ExecutionPayloadEnvelopeOrigin::Api(None),
+            submission_time,
+        }
+    } else {
+        PendingExecutionPayloadEnvelope {
+            execution_payload_envelope,
+            origin,
+            submission_time,
         }
     }
 }
