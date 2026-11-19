@@ -4840,6 +4840,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "keccak256"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?rev=283686575c4e81790591d2c6e3ed21c69c0e3bbe#283686575c4e81790591d2c6e3ed21c69c0e3bbe"
+
+[[package]]
 name = "keymanager"
 version = "0.1.0"
 dependencies = [
@@ -4935,6 +4940,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 dependencies = [
  "spin",
+]
+
+[[package]]
+name = "lean_xmss"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?rev=283686575c4e81790591d2c6e3ed21c69c0e3bbe#283686575c4e81790591d2c6e3ed21c69c0e3bbe"
+dependencies = [
+ "keccak256",
 ]
 
 [[package]]
@@ -10427,6 +10440,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
 dependencies = [
  "xml-rs",
+]
+
+[[package]]
+name = "xmss"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "lean_xmss",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ssz",
+ "thiserror 2.0.21",
+ "typenum",
+ "zeroize",
 ]
 
 [[package]]
