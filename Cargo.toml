@@ -47,6 +47,7 @@ members = [
     'operation_pools',
     'p2p',
     'panics',
+    'pq_prover',
     'predefined_chains',
     'prometheus_metrics',
     'pubkey_cache',
@@ -521,6 +522,7 @@ metrics = { path = 'metrics' }
 operation_pools = { path = 'operation_pools' }
 p2p = { path = 'p2p' }
 panics = { path = 'panics' }
+pq_prover = { path = 'pq_prover' }
 predefined_chains = { path = 'predefined_chains' }
 prometheus_metrics = { path = 'prometheus_metrics' }
 pubkey_cache = { path = 'pubkey_cache' }
