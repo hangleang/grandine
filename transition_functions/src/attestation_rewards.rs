@@ -9,7 +9,7 @@
 
 use core::{iter::Copied, marker::PhantomData, slice};
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use arithmetic::U64Ext as _;
 use helper_functions::{
     accessors::{
@@ -272,7 +272,8 @@ pub fn attestation_rewards<P: Preset>(
             |state, statistics, summaries, participation| {
                 gloas::epoch_deltas(config, state, statistics, summaries, participation)
             },
-        ),
+        ), // TODO(PQ): PQ epoch deltas match Gloas but take the PQ state.
+        BeaconState::Pq(_) => bail!("attestation rewards are not implemented for PQ yet"),
     }
 }
 

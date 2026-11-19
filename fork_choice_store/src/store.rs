@@ -89,8 +89,8 @@ use types::{
     },
     preset::{DataAvailabilityTimelyThreshold, PayloadTimelyThreshold, Preset},
     traits::{
-        self, BeaconBlock as _, BeaconState as _, PostGloasBeaconState, SignedBeaconBlock as _,
-        SszValidatorList,
+        self, BeaconBlock as _, BeaconState as _, BlockBodyWithPayloadBid, PostGloasBeaconState,
+        SignedBeaconBlock as _, SszValidatorList,
     },
 };
 use unwrap_none::UnwrapNone as _;
@@ -2131,8 +2131,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
 
         if let Some(body_with_payload_bid) = block.body().with_payload_bid() {
             return body_with_payload_bid
-                .signed_execution_payload_bid()
-                .message
+                .execution_payload_bid()
                 .parent_block_hash;
         }
 
@@ -3985,7 +3984,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
                 .message()
                 .body()
                 .with_payload_bid()
-                .map(|body| body.signed_execution_payload_bid().blob_kzg_commitments())
+                .map(|body| &body.execution_payload_bid().blob_kzg_commitments)
                 .ok_or_else(|| Error::DataColumnSidecarBlockWithoutPayloadBid {
                     data_column_sidecar: data_column_sidecar.clone_arc(),
                 })?;
@@ -4333,7 +4332,7 @@ impl<P: Preset, S: Storage<P>> Store<P, S> {
             .message()
             .body()
             .with_payload_bid()
-            .map(|body| &body.signed_execution_payload_bid().message)
+            .map(BlockBodyWithPayloadBid::execution_payload_bid)
         else {
             return Err(Error::<P>::PayloadEnvelopeInvalidBlock {
                 block_root: beacon_block_root,
