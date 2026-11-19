@@ -6,7 +6,7 @@ use execution_engine::PayloadStatusWithBlockHash;
 use helper_functions::misc;
 use pubkey_cache::PubkeyCache;
 use serde::Deserialize;
-use spec_test_utils::Case;
+use spec_test_utils::{BlsSetting, Case};
 use ssz::{ContiguousList, SszList};
 use std_ext::ArcExt as _;
 use tap::Pipe as _;
@@ -240,7 +240,13 @@ async fn run_case<P: Preset>(config: &Arc<Config>, case: Case<'_>) {
         .pipe(Arc::new);
 
     let anchor_state = case.ssz::<_, Arc<BeaconState<P>>>(config.as_ref(), "anchor_state");
-    let meta = case.meta();
+    let mut meta = case.meta();
+
+    // PQ vectors are generated without XMSS signatures or STARK proofs.
+    if config.genesis_phase() == Phase::Pq {
+        meta.bls_setting = BlsSetting::Ignored;
+    }
+
     let steps = case.yaml::<Vec<Step>>("steps");
     let genesis_time = anchor_state.genesis_time();
     let pubkey_cache = Arc::new(PubkeyCache::default());
@@ -355,6 +361,13 @@ async fn run_case<P: Preset>(config: &Arc<Config>, case: Case<'_>) {
                     } else {
                         context.on_block_with_missing_blobs(&block, expected_blob_count);
                     }
+                } else if block.phase() == Phase::Pq {
+                    // Gossip validation always verifies signatures.
+                    if valid {
+                        context.on_valid_test_block(&block, meta.bls_setting);
+                    } else {
+                        context.on_invalid_test_block(&block, meta.bls_setting);
+                    }
                 } else if valid {
                     context.on_valid_block(&block);
                 } else {
@@ -424,11 +437,14 @@ async fn run_case<P: Preset>(config: &Arc<Config>, case: Case<'_>) {
                     Phase::Electra | Phase::Fulu | Phase::Gloas => {
                         AttesterSlashing::Electra(case.ssz(config, file_name))
                     }
-                    // TODO(PQ): Decode PQ attester slashings.
-                    Phase::Pq => panic!("PQ attester slashings are not supported yet"),
+                    Phase::Pq => AttesterSlashing::Pq(case.ssz(config, file_name)),
                 };
 
-                context.on_attester_slashing(attester_slashing);
+                if config.genesis_phase() == Phase::Pq {
+                    context.on_test_attester_slashing(attester_slashing, meta.bls_setting);
+                } else {
+                    context.on_attester_slashing(attester_slashing);
+                }
             }
             Step::Checks { checks } => {
                 let Checks {

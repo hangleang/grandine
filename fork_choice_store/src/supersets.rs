@@ -110,7 +110,16 @@ impl<P: Preset> MultiPhaseAggregateAndProofSets<P> {
                 self.electra_supersets
                     .check(&data, &attestation.aggregation_bits)
             }
-            Attestation::Single(_) => {
+            Attestation::Pq(attestation) => {
+                let data = AttestationData {
+                    index: committee_index,
+                    ..attestation.data
+                };
+
+                self.electra_supersets
+                    .check(&data, &attestation.aggregation_bits.clone().into())
+            }
+            Attestation::Single(_) | Attestation::PqSingle(_) => {
                 unreachable!(
                     "single attestations should not be validated with methods meant for aggregate and proofs only"
                 )
