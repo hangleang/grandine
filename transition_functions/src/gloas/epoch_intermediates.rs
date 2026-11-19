@@ -10,17 +10,17 @@ use types::{
         TIMELY_HEAD_WEIGHT, TIMELY_SOURCE_WEIGHT, TIMELY_TARGET_WEIGHT, WEIGHT_DENOMINATOR,
     },
     config::Config,
-    gloas::beacon_state::BeaconState,
     nonstandard::Participation,
     phase0::primitives::Gwei,
     preset::Preset,
+    traits::PostAltairBeaconState,
 };
 
 use crate::altair::{EpochDeltas, Statistics, ValidatorSummary};
 
 pub fn epoch_deltas<P: Preset, D: EpochDeltas>(
     config: &Config,
-    state: &BeaconState<P>,
+    state: &impl PostAltairBeaconState<P>,
     statistics: Statistics,
     summaries: impl IntoIterator<Item = ValidatorSummary>,
     participation: impl IntoIterator<Item = Participation>,
@@ -34,7 +34,7 @@ pub fn epoch_deltas<P: Preset, D: EpochDeltas>(
     let head_increments = statistics.previous_epoch_head_participating_balance / increment;
     let active_increments = total_active_balance(state) / increment;
 
-    izip!(summaries, participation, &state.inactivity_scores)
+    izip!(summaries, participation, state.inactivity_scores().iter())
         .map(|(summary, participation, inactivity_score)| -> Result<D> {
             let mut deltas = D::default();
 
@@ -113,7 +113,10 @@ pub fn epoch_deltas<P: Preset, D: EpochDeltas>(
 mod spec_tests {
     use spec_test_utils::Case;
     use test_generator::test_resources;
-    use types::preset::{Mainnet, Minimal};
+    use types::{
+        gloas::beacon_state::BeaconState,
+        preset::{Mainnet, Minimal},
+    };
 
     use crate::{
         altair::{self, EpochDeltasForReport},

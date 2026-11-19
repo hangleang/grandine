@@ -109,6 +109,9 @@ pub mod pq {
     pub mod containers;
     pub mod primitives;
     pub mod validator_list;
+
+    #[cfg(test)]
+    mod spec_tests;
 }
 
 pub use collections::{
