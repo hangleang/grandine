@@ -32,6 +32,7 @@ use crate::{
             Uint256, UnixSeconds, ValidatorIndex,
         },
     },
+    pq::containers::PayloadAttestationMessage as PqPayloadAttestationMessage,
     preset::Preset,
 };
 
@@ -464,6 +465,8 @@ pub struct SignedProposerPreferences {
 pub enum CombinedPayloadAttestation<P: Preset> {
     Attestation(PayloadAttestation<P>),
     Message(Arc<PayloadAttestationMessage>),
+    // PQ blocks carry no payload attestations, so PQ messages only reach fork choice.
+    PqMessage(Arc<PqPayloadAttestationMessage>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize, Serialize, Ssz)]

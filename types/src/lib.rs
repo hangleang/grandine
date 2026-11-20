@@ -110,6 +110,8 @@ pub mod pq {
     pub mod primitives;
     pub mod validator_list;
 
+    mod container_impls;
+
     #[cfg(test)]
     mod spec_tests;
 }

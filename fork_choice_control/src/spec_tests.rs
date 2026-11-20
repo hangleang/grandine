@@ -15,12 +15,12 @@ use typenum::Unsigned as _;
 use types::{
     combined::{
         Attestation, AttesterSlashing, BeaconBlock, BeaconState, DataColumnSidecar,
-        SignedBeaconBlock,
+        SignedBeaconBlock, SignedExecutionPayloadEnvelope,
     },
     config::Config,
     deneb::primitives::{Blob, KzgProof},
     gloas::{
-        containers::{PayloadAttestationMessage, SignedExecutionPayloadEnvelope},
+        containers::{CombinedPayloadAttestation, PayloadAttestationMessage},
         primitives::PayloadStatus,
     },
     nonstandard::{Phase, TimedPowBlock},
@@ -28,6 +28,7 @@ use types::{
         containers::Checkpoint,
         primitives::{H256, Slot, UnixSeconds},
     },
+    pq::containers::PayloadAttestationMessage as PqPayloadAttestationMessage,
     preset::{Mainnet, Minimal, Preset},
     traits::{BeaconState as _, BlockBodyWithBlobKzgCommitments, SignedBeaconBlock as _},
 };
@@ -221,6 +222,28 @@ struct ViableHeadRootAndWeight {
     ["consensus-spec-tests/tests/minimal/gloas/fork_choice/payload_timeliness/*/*"]             [gloas_minimal_payload_timeliness]             [Minimal] [Gloas];
     ["consensus-spec-tests/tests/minimal/gloas/fork_choice/reorg/*/*"]                          [gloas_minimal_reorg]                          [Minimal] [Gloas];
     ["consensus-spec-tests/tests/minimal/gloas/fork_choice/withholding/*/*"]                    [gloas_minimal_withholding]                    [Minimal] [Gloas];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/ex_ante/*/*"]                        [pq_mainnet_ex_ante]                        [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/get_head/*/*"]                       [pq_mainnet_get_head]                       [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/get_parent_payload_status/*/*"]      [pq_mainnet_get_parent_payload_status]      [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/on_attestation/*/*"]                 [pq_mainnet_on_attestation]                 [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/on_block/*/*"]                       [pq_mainnet_on_block]                       [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/on_execution_payload_envelope/*/*"]  [pq_mainnet_on_execution_payload_envelope]  [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/on_payload_attestation_message/*/*"] [pq_mainnet_on_payload_attestation_message] [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/payload_data_availability/*/*"]      [pq_mainnet_payload_data_availability]      [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/mainnet/pq/fork_choice/payload_timeliness/*/*"]             [pq_mainnet_payload_timeliness]             [Mainnet] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/ex_ante/*/*"]                        [pq_minimal_ex_ante]                        [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/filter_node_tree_variants/*/*"]      [pq_minimal_filter_node_tree_variants]      [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/get_head/*/*"]                       [pq_minimal_get_head]                       [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/get_parent_payload_status/*/*"]      [pq_minimal_get_parent_payload_status]      [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/on_attestation/*/*"]                 [pq_minimal_on_attestation]                 [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/on_block/*/*"]                       [pq_minimal_on_block]                       [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/on_execution_payload_envelope/*/*"]  [pq_minimal_on_execution_payload_envelope]  [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/on_payload_attestation_message/*/*"] [pq_minimal_on_payload_attestation_message] [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/payload_data_availability/*/*"]      [pq_minimal_payload_data_availability]      [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/payload_timeliness/*/*"]             [pq_minimal_payload_timeliness]             [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/reorg/*/*"]                          [pq_minimal_reorg]                          [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/should_apply_proposer_boost/*/*"]    [pq_minimal_should_apply_proposer_boost]    [Minimal] [Pq];
+    ["consensus-spec-tests/tests/minimal/pq/fork_choice/withholding/*/*"]                    [pq_minimal_withholding]                    [Minimal] [Pq];
 )]
 #[test_resources(glob)]
 fn function_name(case: Case<'_>) {
@@ -411,15 +434,31 @@ async fn run_case<P: Preset>(config: &Arc<Config>, case: Case<'_>) {
                 payload_attestation_message,
                 valid,
             } => {
-                let message = case.ssz::<_, Arc<PayloadAttestationMessage>>(
-                    config.as_ref(),
-                    payload_attestation_message,
-                );
+                if config.genesis_phase() == Phase::Pq {
+                    let message = case.ssz::<_, Arc<PqPayloadAttestationMessage>>(
+                        config.as_ref(),
+                        payload_attestation_message,
+                    );
+                    let payload_attestation =
+                        Arc::new(CombinedPayloadAttestation::PqMessage(message));
 
-                if valid {
-                    context.on_valid_payload_attestation_message(message);
+                    if valid {
+                        context.on_valid_payload_attestation(payload_attestation, meta.bls_setting);
+                    } else {
+                        context
+                            .on_invalid_payload_attestation(payload_attestation, meta.bls_setting);
+                    }
                 } else {
-                    context.on_invalid_payload_attestation_message(message);
+                    let message = case.ssz::<_, Arc<PayloadAttestationMessage>>(
+                        config.as_ref(),
+                        payload_attestation_message,
+                    );
+
+                    if valid {
+                        context.on_valid_payload_attestation_message(message);
+                    } else {
+                        context.on_invalid_payload_attestation_message(message);
+                    }
                 }
             }
             Step::PayloadStatus(payload_status_with_block_hash) => {

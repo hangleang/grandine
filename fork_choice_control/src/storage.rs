@@ -20,16 +20,17 @@ use tracing::info;
 use transition_functions::combined;
 use typenum::Unsigned as _;
 use types::{
-    combined::{BeaconState, DataColumnSidecar, SignedBeaconBlock, SignedBlindedBeaconBlock},
+    combined::{
+        BeaconState, DataColumnSidecar, EnvelopeExecutionRequests, SignedBeaconBlock,
+        SignedBlindedBeaconBlock, SignedBlindedExecutionPayloadEnvelope,
+        SignedExecutionPayloadEnvelope,
+    },
     config::Config,
     deneb::{
         containers::{BlobIdentifier, BlobSidecar},
         primitives::BlobIndex,
     },
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
-    gloas::containers::{
-        ExecutionRequests, SignedBlindedExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope,
-    },
     nonstandard::{
         BlobSidecarWithId, DataColumnSidecarWithId, ExecutionPayloadBody, FinalizedCheckpoint,
         Phase, PubkeyList, StorageMode,
@@ -757,8 +758,7 @@ impl<P: Preset> Storage<P> {
         let value_bytes = zstd::decode_all(value_bytes.as_slice())?;
         let envelope = SignedBlindedExecutionPayloadEnvelope::<P>::from_ssz_default(value_bytes)?;
 
-        let payload_key =
-            ExecutionPayloadBySlotAndRoot(envelope.message.payload_header.slot_number, block_root);
+        let payload_key = ExecutionPayloadBySlotAndRoot(envelope.slot(), block_root);
 
         let Some(payload_bytes) = self.database.get_raw(payload_key.to_string())? else {
             return Ok(Some(StoredEnvelope::Blinded(Arc::new(envelope))));
@@ -1517,10 +1517,10 @@ pub enum StoredEnvelope<P: Preset> {
 
 impl<P: Preset> StoredEnvelope<P> {
     #[must_use]
-    pub fn execution_requests(&self) -> &ExecutionRequests<P> {
+    pub fn execution_requests(&self) -> EnvelopeExecutionRequests<'_, P> {
         match self {
-            Self::Full(envelope) => &envelope.message.execution_requests,
-            Self::Blinded(envelope) => &envelope.message.execution_requests,
+            Self::Full(envelope) => envelope.message().execution_requests(),
+            Self::Blinded(envelope) => envelope.message().execution_requests(),
         }
     }
 }
@@ -2015,6 +2015,8 @@ mod tests {
         preset::Mainnet,
     };
 
+    use types::gloas::containers::SignedExecutionPayloadEnvelope as GloasSignedExecutionPayloadEnvelope;
+
     use super::*;
 
     fn block_with_slot(slot: Slot) -> SignedBeaconBlock<Mainnet> {
@@ -2243,10 +2245,10 @@ mod tests {
     #[test]
     fn test_legacy_execution_payload_envelopes() -> Result<()> {
         let envelope = |slot, block_root| {
-            let mut envelope = SignedExecutionPayloadEnvelope::<Mainnet>::default();
+            let mut envelope = GloasSignedExecutionPayloadEnvelope::<Mainnet>::default();
             envelope.message.payload.slot_number = slot;
             envelope.message.beacon_block_root = block_root;
-            envelope
+            SignedExecutionPayloadEnvelope::from(envelope)
         };
 
         let legacy_envelope = envelope(1, H256::repeat_byte(1));
@@ -2321,10 +2323,10 @@ mod tests {
         );
 
         let envelope = |slot, block_root| {
-            let mut envelope = SignedExecutionPayloadEnvelope::<Mainnet>::default();
+            let mut envelope = GloasSignedExecutionPayloadEnvelope::<Mainnet>::default();
             envelope.message.payload.slot_number = slot;
             envelope.message.beacon_block_root = block_root;
-            Arc::new(envelope)
+            Arc::new(SignedExecutionPayloadEnvelope::from(envelope))
         };
 
         let root_5 = H256::repeat_byte(5);

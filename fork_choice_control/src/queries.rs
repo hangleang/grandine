@@ -26,15 +26,14 @@ use tracing::instrument;
 use typenum::Unsigned as _;
 use types::{
     combined::{
-        BeaconState, DataColumnSidecar, SignedAggregateAndProof, SignedBeaconBlock, UnblindError,
+        BeaconState, DataColumnSidecar, SignedAggregateAndProof, SignedBeaconBlock,
+        SignedExecutionPayloadEnvelope, UnblindError,
     },
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
     gloas::{
         consts::PAYLOAD_STATUS_FULL,
-        containers::{
-            SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
-        },
+        containers::{SignedExecutionPayloadBid, SignedProposerPreferences},
         primitives::PayloadStatus as ExecutionPayloadStatus,
     },
     nonstandard::{ExecutionPayloadBody, PayloadStatus, Phase, RelativeEpoch, WithStatus},
@@ -1348,7 +1347,7 @@ where
                 }
             };
 
-            let execution_block_hash = envelope.message.payload_header.block_hash;
+            let execution_block_hash = envelope.message().block_hash();
 
             pending_payloads.push((output.len(), envelope, execution_block_hash));
             output.push(Err(BlockError::PayloadBodyNotFound {

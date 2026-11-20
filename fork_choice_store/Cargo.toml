@@ -45,3 +45,4 @@ tynm = { workspace = true }
 typenum = { workspace = true }
 types = { workspace = true }
 unwrap_none = { workspace = true }
+xmss = { workspace = true }
