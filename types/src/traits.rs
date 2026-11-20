@@ -67,7 +67,7 @@ use crate::{
         Attestation as CombinedAtteststation, AttesterSlashing as CombinedAttesterSlashing,
         BeaconBlock as CombinedBeaconBlock, BeaconState as CombinedBeaconState,
         BlindedBeaconBlock as CombinedBlindedBeaconBlock, EnvelopeExecutionRequests,
-        EnvelopeSignature, ExecutionPayloadHeader as CombinedExecutionPayloadHeader,
+        ExecutionPayloadHeader as CombinedExecutionPayloadHeader, SignatureRef,
         SignedBeaconBlock as CombinedSignedBeaconBlock,
         SignedBlindedBeaconBlock as CombinedSignedBlindedBeaconBlock,
         SignedBlindedExecutionPayloadEnvelope as CombinedSignedBlindedExecutionPayloadEnvelope,
@@ -1216,7 +1216,7 @@ impl<P: Preset> SignedBeaconBlock<P> for CombinedSignedBlindedBeaconBlock<P> {
 
 pub trait SignedExecutionPayloadEnvelope<P: Preset>: Debug + Send + Sync {
     fn message(&self) -> &dyn ExecutionPayloadEnvelope<P>;
-    fn signature(&self) -> EnvelopeSignature<'_>;
+    fn signature(&self) -> SignatureRef<'_>;
 
     // `None` when the payload body has been stripped.
     fn into_full(self: Arc<Self>) -> Option<Arc<CombinedSignedExecutionPayloadEnvelope<P>>>;
@@ -1227,7 +1227,7 @@ impl<P: Preset> SignedExecutionPayloadEnvelope<P> for CombinedSignedExecutionPay
         self.message()
     }
 
-    fn signature(&self) -> EnvelopeSignature<'_> {
+    fn signature(&self) -> SignatureRef<'_> {
         self.signature()
     }
 
@@ -1243,7 +1243,7 @@ impl<P: Preset> SignedExecutionPayloadEnvelope<P>
         self.message()
     }
 
-    fn signature(&self) -> EnvelopeSignature<'_> {
+    fn signature(&self) -> SignatureRef<'_> {
         self.signature()
     }
 

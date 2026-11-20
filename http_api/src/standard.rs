@@ -95,7 +95,9 @@ use types::{
     capella::containers::{SignedBlsToExecutionChange, Withdrawal},
     combined::{
         Attestation, AttesterSlashing, BeaconBlock, BeaconState, DataColumnSidecar,
-        SignedBeaconBlock, SignedBlindedBeaconBlock, SignedExecutionPayloadEnvelope,
+        ProposerSlashing, SignedBeaconBlock, SignedBlindedBeaconBlock,
+        SignedExecutionPayloadEnvelope,
+        SignedProposerPreferences as CombinedSignedProposerPreferences,
     },
     config::Config as ChainConfig,
     deneb::{
@@ -124,7 +126,7 @@ use types::{
         consts::GENESIS_SLOT,
         containers::{
             AttestationData, AttesterSlashing as Phase0AttesterSlashing, Checkpoint, Fork,
-            ProposerSlashing, SignedVoluntaryExit, Validator,
+            SignedVoluntaryExit, Validator,
         },
         primitives::{
             ChainId, CommitteeIndex, Epoch, ExecutionAddress, Gwei, H256, Slot, SubnetId, Uint256,
@@ -2558,11 +2560,11 @@ pub async fn submit_pool_proposer_slashing<P: Preset, W: Wait>(
     EthJson(proposer_slashing): EthJson<Box<ProposerSlashing>>,
 ) -> Result<(), Error> {
     let outcome = block_producer
-        .handle_external_proposer_slashing(*proposer_slashing)
+        .handle_external_proposer_slashing((*proposer_slashing).clone())
         .await?;
 
     if outcome.is_publishable() {
-        event_channels.send_proposer_slashing_event(*proposer_slashing);
+        event_channels.send_proposer_slashing_event((*proposer_slashing).clone());
         ApiToP2p::PublishProposerSlashing(proposer_slashing).send(&api_to_p2p_tx);
     }
 
@@ -4857,6 +4859,10 @@ pub async fn validator_proposer_preferences<P: Preset, W: Wait>(
         .into_iter()
         .enumerate()
         .map(|(index, signed_preferences)| {
+            // TODO(PQ): Accept PQ proposer preferences.
+            let signed_preferences = Arc::new(CombinedSignedProposerPreferences::from(
+                *signed_preferences.as_ref(),
+            ));
             let (sender, receiver) = futures::channel::oneshot::channel();
 
             controller.on_api_proposer_preferences(signed_preferences.clone_arc(), sender);

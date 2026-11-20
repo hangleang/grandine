@@ -2962,7 +2962,7 @@ where
                 let phase = self
                     .store
                     .chain_config()
-                    .phase_at_slot::<P>(signed_preferences.message.proposal_slot);
+                    .phase_at_slot::<P>(signed_preferences.message().proposal_slot);
 
                 if let Some(metrics) = self.metrics.as_ref() {
                     metrics.register_mutator_proposer_preferences(&["accepted"]);
@@ -2970,8 +2970,8 @@ where
 
                 trace_with_peers!(
                     "proposer preferences accepted (validator_index: {}, proposal_slot: {})",
-                    signed_preferences.message.validator_index,
-                    signed_preferences.message.proposal_slot
+                    signed_preferences.message().validator_index,
+                    signed_preferences.message().proposal_slot
                 );
 
                 let (gossip_id, sender) = origin.split();
@@ -3008,7 +3008,7 @@ where
                     metrics.register_mutator_proposer_preferences(&["delayed_until_block"]);
                 }
 
-                let dependent_root = signed_preferences.message.dependent_root;
+                let dependent_root = signed_preferences.message().dependent_root;
 
                 self.delay_proposer_preferences_until_block(
                     wait_group.clone(),
@@ -5210,7 +5210,7 @@ where
             gossip_ids.extend(
                 proposer_preferences
                     .extract_if(.., |pending| {
-                        pending.signed_preferences.message.proposal_slot <= finalized_slot
+                        pending.signed_preferences.message().proposal_slot <= finalized_slot
                     })
                     .filter_map(|pending| pending.origin.gossip_id()),
             );
