@@ -27,14 +27,12 @@ use typenum::Unsigned as _;
 use types::{
     combined::{
         BeaconState, DataColumnSidecar, SignedAggregateAndProof, SignedBeaconBlock,
-        SignedExecutionPayloadEnvelope, SignedProposerPreferences, UnblindError,
+        SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
+        UnblindError,
     },
     deneb::containers::{BlobIdentifier, BlobSidecar},
     fulu::{containers::DataColumnIdentifier, primitives::ColumnIndex},
-    gloas::{
-        consts::PAYLOAD_STATUS_FULL, containers::SignedExecutionPayloadBid,
-        primitives::PayloadStatus as ExecutionPayloadStatus,
-    },
+    gloas::{consts::PAYLOAD_STATUS_FULL, primitives::PayloadStatus as ExecutionPayloadStatus},
     nonstandard::{ExecutionPayloadBody, PayloadStatus, Phase, RelativeEpoch, WithStatus},
     phase0::{
         containers::Checkpoint,
